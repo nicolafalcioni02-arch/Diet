@@ -104,7 +104,16 @@ const calculateIdealWeight = (sex, h) => {
 
 export const DietPlan = ({ patient }) => {
 
-    
+    // Mock Dati Paziente (Collega questi ai tuoi stati reali del paziente)
+    const patientProfile = {
+        name: nomePaziente || "Mario Rossi",
+        gender: sessoPaziente === 'M' ? 'Male' : 'Female',
+        age: etaPaziente || 30, // Anni
+        weight: pesoPaziente || 70,
+        pathologies: ["Ipertensione Lieve"],
+        allergies: ["Nichel", "Lattosio"],
+        notes: "Intensa attività sportiva"
+    };
 
    // --- MOTORE MATRICE (GLOBALE & DAILY) ---
     const setMatrixState = (updater) => {
@@ -325,6 +334,55 @@ export const DietPlan = ({ patient }) => {
     // Stati per la ricerca e l'inserimento nel database
     const [dbSearch, setDbSearch] = useState('');
     const [newFood, setNewFood] = useState({ name: '', category: '', kcal: '', p: '', c: '', f: '' });
+
+    // --- STATI DATABASE AVANZATO ---
+    const [editingFood, setEditingFood] = useState(null); // Se null, mostra la lista. Se oggetto, mostra l'editor
+    const [editorTab, setEditorTab] = useState('base'); // 'base', 'macro', 'micro', 'grassi', 'amino', 'altro'
+
+    // Template vuoto con TUTTI i campi del tuo JSON
+    const emptyFoodTemplate = {
+        name: "", category: "", food_code: "", scientific_name: "", english_name: "", info: "",
+        samples_number: 0, edible_part: 1.0, portion: 100, image: "", water: 0, energy_kcal: 0, energy_kj: 0,
+        proteins: 0, lipids: 0, cholesterol: 0, available_carbohydrates: 0, starch: 0, soluble_sugars: 0,
+        alcohol: 0, total_fiber: 0, soluble_fiber: 0, insoluble_fiber: 0, sucrose: 0, glucose: 0, fructose: 0,
+        lactose: 0, galactose: 0, maltose: 0, maltotriosium: 0, raffinose: 0, fluorine: 0, sodium: 0, magnesium: 0,
+        phosphorus: 0, chlorine: 0, potassium: 0, calcium: 0, chromium: 0, manganese: 0, iron: 0, nickel: 0,
+        copper: 0, zinc: 0, selenium: 0, iodine: 0, total_carotenoids: 0, alpha_carotene: 0, beta_carotene: 0,
+        cryptoxanthin: 0, lycopene: 0, lutein: 0, retinol: 0, zeaxanthin: 0, vitamin_a_retinol_equivalent: 0,
+        thiamine: 0, riboflavin: 0, niacin: 0, pantothenic_acid: 0, vitamin_b6: 0, biotin: 0, folate: 0,
+        vitamin_b12: 0, vitamin_c: 0, vitamin_d: 0, vitamin_e: 0, alpha_tocopherol: 0, beta_tocopherol: 0,
+        gamma_tocopherol: 0, delta_tocopherol: 0, vitamin_k: 0, Saturated_fatty_acids: 0, "C4:0-C10:0": 0,
+        "C4:0_butyric_acid": 0, "C6:0_capronic_acid": 0, "C7:0_enanthic_acid": 0, "C8:0_caprylic_acid": 0,
+        "C10:0_caprinic_acid": 0, "C12:0_lauric_acid": 0, "C13:0_tridecanoic_acid": 0, "C14:0_myristic_acid": 0,
+        "C15:0_pentadecanoic_acid": 0, "C16:0_palmitic_acid": 0, "C17:0_heptadecanoic_acid": 0, "C18:0_stearic_acid": 0,
+        "C20:0_arachidic_acid": 0, "C22:0_behenic_acid": 0, "C24:0_lignoceric_acid": 0, monounsaturated_fatty_acids: 0,
+        "C10:1_caproleic_acid": 0, "C12:1_lauroleic_acid": 0, "C13:1_tridecenoic_acid": 0, "C14:1_myristoleic_acid": 0,
+        "C15:1_pentadecenoic_acid": 0, "C16:1 palmitoleic_acid": 0, "C17:1_heptadecenoic_acid": 0, "C18:1_oleic_acid": 0,
+        "C20:1_eicosenoic_acid": 0, "C22:1_erucic_acid": 0, polyunsaturated_fatty_acids: 0, "C18:2_linoleic_acid": 0,
+        "C18:3_linolenic_acid": 0, "C20:4_arachidonic_acid": 0, "C20:5_eicosapentaenoic_acid_EPA": 0,
+        "C22:6_docosahexaenoic_acid_DHA": 0, polyunsaturated_saturated: 0, alanine: 0, cystine: 0, aspartic_acid: 0,
+        glutamic_acid: 0, phenylalanine: 0, glycine: 0, histidine: 0, isoleucine: 0, lysine: 0, leucine: 0,
+        methionine: 0, proline: 0, arginine: 0, serine: 0, threonine: 0, valine: 0, tryptophan: 0, tyrosine: 0,
+        chemical_index: 0, limiting_amino_acid: "", caffeic_acid: 0, citric_acid: 0, phytic_acid: 0, malic_acid: 0,
+        apigenin: 0, antioxidant_activity: 0, campferol: 0, phytosterols: 0, "fructo-oligosaccharides": 0,
+        myricetin: 0, polyphenols: 0, quercetin: 0, violaxanthin: 0
+    };
+
+    const handleSaveEditedFood = () => {
+        if (!editingFood.name) return alert("Il nome è obbligatorio!");
+        
+        // Se ha un indice (_editIndex) lo stiamo modificando, altrimenti è nuovo
+        if (editingFood._editIndex !== undefined) {
+            const newDb = [...foodDB];
+            const idx = editingFood._editIndex;
+            delete editingFood._editIndex; // pulizia
+            newDb[idx] = editingFood;
+            setFoodDB(newDb);
+        } else {
+            setFoodDB([editingFood, ...foodDB]);
+        }
+        setEditingFood(null);
+    };
     
     // Autocompletamento per la ricerca degli alimenti durante la compilazione del pasto
     const [suggestions, setSuggestions] = useState({});
@@ -334,6 +392,24 @@ export const DietPlan = ({ patient }) => {
         const stored = localStorage.getItem('diet_targets');
         return stored ? JSON.parse(stored) : { kcal: 0, p: 0, c: 0, f: 0, isConfigured: false };
     });
+
+    // Da aggiungere vicino agli altri stati (es. riga 202)
+    const [mealLibrary, setMealLibrary] = useState(() => {
+        const stored = localStorage.getItem('diet_meal_library');
+        return stored ? JSON.parse(stored) : [];
+    });
+    const [isSaveModalOpen, setIsSaveModalOpen] = useState(false);
+    const [mealToSave, setMealToSave] = useState(null);
+
+    useEffect(() => {
+        localStorage.setItem('diet_meal_library', JSON.stringify(mealLibrary));
+    }, [mealLibrary]);
+
+    // Stato per aprire il "Gestionale" (Libreria)
+    const [isLibraryOpen, setIsLibraryOpen] = useState(false);
+
+    // Filtro per la libreria dei pasti salvati 
+    const [libFilter, setLibFilter] = useState('Tutti');
 
     // Ref per Import JSON del database
     const fileInputRef = useRef(null);
@@ -493,11 +569,76 @@ export const DietPlan = ({ patient }) => {
         } : d));
     };
 
+    
+
+const handleSaveClick = (meal) => {
+    // Sostituito anche l'alert di errore con un check silenzioso (o puoi mettere un toast se preferisci)
+    if (!meal || !meal.items || meal.items.length === 0) return; 
+
+    setMealToSave({
+        ...JSON.parse(JSON.stringify(meal)),
+        customName: meal.title,
+        note: ''
+    });
+    setIsSaveModalOpen(true);
+};
+
+const confirmSaveToLibrary = () => {
+    const finalMeal = {
+        id: 'lib-' + Date.now(),
+        title: mealToSave.customName,
+        items: mealToSave.items,
+        totals: calculateTotals(mealToSave.items),
+        savedAt: new Date().toLocaleDateString('it-IT'),
+        note: mealToSave.note
+    };
+    setMealLibrary(prev => [finalMeal, ...prev]);
+    setIsSaveModalOpen(false);
+    setMealToSave(null);
+};
+
+
+
+// Carica un pasto dalla libreria nel giorno/pasto attivo
+const loadFromLibrary = (libMeal) => {
+    if (!activeMealInfo) return;
+    
+    setDietDays(prev => prev.map(d => d.id === activeMealInfo.dayId ? {
+        ...d, meals: d.meals.map(m => m.id === activeMealInfo.mealId ? {
+            ...m, 
+            items: [...m.items, ...JSON.parse(JSON.stringify(libMeal.items))] // Appende gli alimenti
+        } : m)
+    } : d));
+    
+    setIsLibraryOpen(false);
+};
+
+const SaveIcon = () => (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
+        <polyline points="17 21 17 13 7 13 7 21"></polyline>
+        <polyline points="7 3 7 8 15 8"></polyline>
+    </svg>
+);
+
+const HistoryIcon = () => (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+        <line x1="12" y1="5" x2="12" y2="19"></line>
+        <line x1="5" y1="12" x2="19" y2="12"></line>
+    </svg>
+);
+
     const applyFoodSuggestion = (dayId, mealId, itemId, dbItem) => {
         setDietDays(prev => prev.map(d => d.id === dayId ? {
             ...d, meals: d.meals.map(m => m.id === mealId ? {
                 ...m, items: m.items.map(item => item.id === itemId ? { 
-                    ...item, name: dbItem.name, kcal: dbItem.kcal, p: dbItem.p, c: dbItem.c, f: dbItem.f 
+                    ...item, 
+                    name: dbItem.name, 
+                    // Mappa i campi del nuovo JSON avanzato nei campi usati per i calcoli
+                    kcal: dbItem.energy_kcal || dbItem.kcal || 0, 
+                    p: dbItem.proteins || dbItem.p || 0, 
+                    c: dbItem.available_carbohydrates || dbItem.c || 0, 
+                    f: dbItem.lipids || dbItem.f || 0 
                 } : item)
             } : m)
         } : d));
@@ -515,6 +656,53 @@ export const DietPlan = ({ patient }) => {
                 f: acc.f + ((parseFloat(curr.f) || 0) * ratio),
             };
         }, { kcal: 0, p: 0, c: 0, f: 0 });
+    };
+
+    // --- COMPONENTE BARRA MACRO DINAMICA ---
+    const MacroProgressBar = ({ label, current, target, hexColor }) => {
+        const safeTarget = target > 0 ? target : 1; 
+        const rawPct = (current / safeTarget) * 100;
+        const pct = Math.min(rawPct, 100);
+        const isOver = current > target && target > 0;
+        
+        const activeColor = isOver ? '#FF3B30' : hexColor;
+        
+        // Calcolo opacità dinamica per lo sfondo (esattamente come hai chiesto: 
+        // parte chiara e arriva a circa il 70% quando la barra è al 90%)
+        const trackOpacity = isOver ? 0.2 : 0.15 + (pct / 100) * 0.60;
+        
+        // Convertitore HEX to RGBA per iniettare l'opacità nello sfondo
+        const hexToRgb = (hex) => {
+            let r = 0, g = 0, b = 0;
+            if (hex.length === 7) {
+                r = parseInt(hex.substring(1, 3), 16);
+                g = parseInt(hex.substring(3, 5), 16);
+                b = parseInt(hex.substring(5, 7), 16);
+            }
+            return `${r}, ${g}, ${b}`;
+        };
+        
+        const trackBg = `rgba(${hexToRgb(activeColor)}, ${trackOpacity})`;
+
+        return (
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', fontWeight: 800, color: '#86868B', textTransform: 'uppercase' }}>
+                    <span>{label}</span>
+                    <span style={{ color: isOver ? '#FF3B30' : '#1D1D1F' }}>
+                        {current.toFixed(0)} / {target.toFixed(0)} {label === 'Kcal' ? '' : 'g'}
+                    </span>
+                </div>
+                <div style={{ width: '100%', height: '8px', background: trackBg, borderRadius: '4px', overflow: 'hidden', transition: 'background 0.3s ease' }}>
+                    <div style={{ 
+                        width: `${pct}%`, 
+                        height: '100%', 
+                        background: activeColor, 
+                        borderRadius: '4px',
+                        transition: 'width 0.4s cubic-bezier(0.4, 0, 0.2, 1), background 0.3s ease' 
+                    }} />
+                </div>
+            </div>
+        );
     };
 
     const [draggedItem, setDraggedItem] = useState(null);
@@ -594,7 +782,36 @@ export const DietPlan = ({ patient }) => {
         setDraggedItem(null);
     };
 
-    // --- GESTIONE DATABASE ALIMENTI ---
+    // Mappatura tra i nomi EFSA e le chiavi del tuo Database Alimenti
+        const NUTRIENT_MAPPING = {
+        "Energy": "energy_kcal",
+        "Protein": "proteins",
+        "Carbohydrate": "available_carbohydrates",
+        "Fat": "lipids",
+        "Dietary fibre": "total_fiber",
+        "Water": "water",
+        "Vitamin A": "vitamin_a_retinol_equivalent",
+        "Thiamin": "thiamine",
+        "Riboflavin": "riboflavin",
+        "Niacin": "niacin",
+        "Vitamin B6": "vitamin_b6",
+        "Folate": "folate",
+        "Vitamin B12": "vitamin_b12",
+        "Vitamin C": "vitamin_c",
+        "Vitamin D": "vitamin_d",
+        "Vitamin E": "vitamin_e",
+        "Vitamin K": "vitamin_k",
+        "Calcium": "calcium",
+        "Phosphorus": "phosphorus",
+        "Magnesium": "magnesium",
+        "Iron": "iron",
+        "Zinc": "zinc",
+        "Copper": "copper",
+        "Selenium": "selenium",
+        "Iodine": "iodine",
+        "Potassium": "potassium",
+        "Sodium": "sodium"
+        };
 
     // --- GESTIONE DATABASE ALIMENTI ---
 
@@ -709,6 +926,27 @@ export const DietPlan = ({ patient }) => {
         scope: 'activeDay', // 'activeDay', 'allDays'
         comment: '' 
     });
+
+    // --- STATI ANALISI AVANZATA E DATABASE EFSA ---
+    const [drvDB, setDrvDB] = useState(() => {
+        const stored = localStorage.getItem('diet_drv_db');
+        return stored ? JSON.parse(stored) : [];
+    });
+    
+    useEffect(() => {
+        localStorage.setItem('diet_drv_db', JSON.stringify(drvDB));
+    }, [drvDB]);
+
+    const [isAnalysisOpen, setIsAnalysisOpen] = useState(false);
+    const [analysisTimeframe, setAnalysisTimeframe] = useState('day'); // 'meal', 'day', 'week'
+    const [selectedMealForAnalysis, setSelectedMealForAnalysis] = useState(null); // ID del pasto se 'meal'
+    
+    // Stati per l'Editor DRV
+    const [isDrvEditorOpen, setIsDrvEditorOpen] = useState(false);
+    const [editingDrv, setEditingDrv] = useState(null);
+    const drvFileInputRef = useRef(null);
+
+    
     
 
     // --- MOTORE PLOTLY.JS (Senza Menu fluttuante e con etichette chiare) ---
@@ -853,6 +1091,41 @@ export const DietPlan = ({ patient }) => {
     useEffect(() => {
         localStorage.setItem('diet_saved_reports', JSON.stringify(savedReports));
     }, [savedReports]);
+
+    // Estrae il numero da stringhe come "80 mg/day"
+    const parseEFSAValue = (valStr) => {
+        if (!valStr || typeof valStr !== 'string') return parseFloat(valStr) || 0;
+        if (valStr.includes('ND') || valStr.includes('NA')) return 0;
+        return parseFloat(valStr.replace(/[^\d.-]/g, '')) || 0;
+    };
+
+    // Trova i target EFSA per il paziente corrente
+    const getPatientTargets = () => {
+        // Filtra il DB EFSA in base a Gender e Age del paziente
+        // Nota: EFSA usa fasce d'età (es. "18-39 years"). Qui prendiamo tutti quelli applicabili al "Gender" o "All".
+        const targets = {};
+        drvDB.forEach(row => {
+            if (row.Gender === patientProfile.gender || row.Gender === "All") {
+                // Per semplificare: prendiamo l'ultimo valore valido (ideale: match esatto fascia d'età)
+                const mappedKey = NUTRIENT_MAPPING[row.Nutrient];
+                if (mappedKey) {
+                    // Cerca il target migliore (PRI > AI > AR)
+                    let targetVal = parseEFSAValue(row.PRI) || parseEFSAValue(row.AI) || parseEFSAValue(row.AR);
+                    let ulVal = parseEFSAValue(row.UL);
+                    
+                    if (targetVal > 0) {
+                        targets[mappedKey] = {
+                            name: row.Nutrient,
+                            target: targetVal,
+                            ul: ulVal,
+                            unit: String(row.PRI || row.AI || row.AR).replace(/[\d.\s]/g, '').replace('/day', '').trim() || 'mg'
+                        };
+                    }
+                }
+            }
+        });
+        return targets;
+    };
 
     // --- GESTIONE SALVATAGGIO REPORT ---
     const saveSmartReport = () => {
@@ -1424,6 +1697,28 @@ export const DietPlan = ({ patient }) => {
                 .laf-row:hover {
                     background: #FAFAFC;
                 }
+                    .preview-badge {
+                    background: #F2F2F7;
+                    padding: 4px 10px;
+                    border-radius: 8px;
+                    font-size: 11px;
+                    font-weight: 600;
+                    color: #1D1D1F;
+                    display: flex;
+                    justify-content: space-between;
+                    margin-bottom: 4px;
+                }
+                .save-modal-icon {
+                    width: 50px;
+                    height: 50px;
+                    background: #E8F5E9;
+                    color: #00C853;
+                    border-radius: 50%;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    margin: 0 auto 20px;
+                }
 
             `}</style>
 
@@ -1764,6 +2059,7 @@ export const DietPlan = ({ patient }) => {
             </main>
 
             {/* --- FINESTRA MODALE IN SOVRAPPRESSIONE PER COMPILARE IL PASTO --- */}
+            {/* --- FINESTRA MODALE IN SOVRAPPRESSIONE PER COMPILARE IL PASTO --- */}
             {activeMealInfo && (() => {
                 const currentDay = dietDays.find(d => d.id === activeMealInfo.dayId);
                 const currentMeal = currentDay?.meals.find(m => m.id === activeMealInfo.mealId);
@@ -1771,10 +2067,32 @@ export const DietPlan = ({ patient }) => {
 
                 const currentMealTotals = calculateTotals(currentMeal.items);
                 
+                // --- CALCOLO TARGET DEL PASTO CORRENTE ---
+                // 1. Recupera la configurazione del giorno
+                const dayConfig = calcData.matrixMode === 'daily' && calcData.dailyConfigs[currentDay.id] 
+                    ? calcData.dailyConfigs[currentDay.id] 
+                    : { macroTargets: calcData.macroTargets, distribution: calcData.distribution };
+                    
+                // 2. Trova la percentuale assegnata a questo pasto (es. Pranzo = 35%)
+                const distMeal = dayConfig.distribution.find(d => d.name.toLowerCase() === currentMeal.title.toLowerCase());
+                const mealPct = distMeal ? (distMeal.value / 100) : 0;
+                
+                // 3. Calcola i grammi esatti che questo pasto dovrebbe avere
+                const dayTdee = currentDay.targets?.kcal || targets.kcal || 0;
+                const dayP_pct = currentDay.targets?.p || dayConfig.macroTargets.p || 0;
+                const dayC_pct = currentDay.targets?.c || dayConfig.macroTargets.c || 0;
+                const dayF_pct = currentDay.targets?.f || dayConfig.macroTargets.f || 0;
+
+                const targetKcal = dayTdee * mealPct;
+                const targetP = (dayTdee * (dayP_pct / 100) * mealPct) / 4;
+                const targetC = (dayTdee * (dayC_pct / 100) * mealPct) / 4;
+                const targetF = (dayTdee * (dayF_pct / 100) * mealPct) / 9;
 
                 return (
                     <div className="modal-backdrop">
                         <div className="modal-window">
+
+                            
                             
                             {/* HEADER DEL MODALE (Titolo pasto e riga totali dal vivo) */}
                             <div style={{ padding: '25px 40px', borderBottom: '1px solid #F0F0F2', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'white' }}>
@@ -1789,6 +2107,8 @@ export const DietPlan = ({ patient }) => {
                                     />
                                 </div>
                                 
+
+                                
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
                                     <div style={{ textAlign: 'center' }}><div style={{ fontSize: '10px', color: '#86868B', textTransform: 'uppercase', fontWeight: 700 }}>Kcal</div><div style={{ fontSize: '16px', fontWeight: 800 }}>{currentMealTotals.kcal.toFixed(0)}</div></div>
                                     <div style={{ textAlign: 'center' }}><div style={{ fontSize: '10px', color: '#86868B', textTransform: 'uppercase', fontWeight: 700 }}>Carbo</div><div style={{ fontSize: '16px', fontWeight: 800 }}>{currentMealTotals.c.toFixed(1)}g</div></div>
@@ -1799,6 +2119,14 @@ export const DietPlan = ({ patient }) => {
                                         X
                                     </button>
                                 </div>
+                            </div>
+
+                            {/* NUOVA SEZIONE: BARRE DI PROGRESSO MACRO */}
+                            <div style={{ padding: '15px 40px', background: '#FFFFFF', borderBottom: '1px solid #E5E5EA', display: 'flex', gap: '30px', alignItems: 'center', zIndex: 10, position: 'sticky', top: 0 }}>
+                                <MacroProgressBar label="Kcal" current={currentMealTotals.kcal} target={targetKcal} hexColor="#007AFF" />
+                                <MacroProgressBar label="Pro" current={currentMealTotals.p} target={targetP} hexColor="#00C853" />
+                                <MacroProgressBar label="Car" current={currentMealTotals.c} target={targetC} hexColor="#1D1D1F" />
+                                <MacroProgressBar label="Fat" current={currentMealTotals.f} target={targetF} hexColor="#86868B" />
                             </div>
 
                             {/* CORPO DEL MODALE (Tabella di editing degli alimenti) */}
@@ -1872,7 +2200,27 @@ export const DietPlan = ({ patient }) => {
                             </div>
 
                             {/* FOOTER DEL MODALE */}
-                            <div style={{ padding: '20px 40px', borderTop: '1px solid #F0F0F2', background: '#FFFFFF', display: 'flex', justifyContent: 'flex-end' }}>
+                            <div style={{ padding: '20px 40px', borderTop: '1px solid #F0F0F2', background: '#FFFFFF', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                {/* Tasti a sinistra */}
+                                <div style={{ display: 'flex', gap: '15px' }}>
+                                    <button 
+    title="Salva come modello"
+    onClick={() => handleSaveClick(currentMeal)}
+    className="w-12 h-12 rounded-full flex items-center justify-center bg-green-50 text-green-600 border border-green-200 hover:bg-green-100 transition-colors"
+>
+    <SaveIcon />
+</button>
+                                    <button 
+                                        title="Apri storico pasti"
+                                        onClick={() => setIsLibraryOpen(true)}
+                                        className="t-icon-btn" 
+                                        style={{ width: '48px', height: '48px', background: '#F5F5F7', color: '#1D1D1F' }}
+                                    >
+                                        <HistoryIcon />
+                                    </button>
+                                </div>
+
+                                {/* Tasto conferma a destra */}
                                 <button onClick={() => setActiveMealInfo(null)} style={{ background: '#1D1D1F', color: 'white', padding: '14px 40px', borderRadius: '12px', border: 'none', fontWeight: 700, cursor: 'pointer', fontSize: '14px' }}>
                                     Conferma e Chiudi
                                 </button>
@@ -1893,6 +2241,153 @@ export const DietPlan = ({ patient }) => {
                     <span style={{ fontSize: '14px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '1px' }}>Stampa</span>
                 </button>
             </div>
+
+           {/* --- MODALE STORICO PASTI (LIBRERIA TIPO TAILWIND) --- */}
+            {/* --- MODALE STORICO PASTI (CON FILTRI DINAMICI) --- */}
+            {isLibraryOpen && (() => {
+                // 1. Estrae i titoli univoci (rimuove i doppioni)
+                const uniqueTitles = ['Tutti', ...new Set(mealLibrary.map(m => m.title).filter(Boolean))];
+                
+                // 2. Filtra la libreria in base al bottone cliccato
+                const filteredLibrary = libFilter === 'Tutti' 
+                    ? mealLibrary 
+                    : mealLibrary.filter(m => m.title === libFilter);
+
+                return (
+                    <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+                        <div className="bg-white rounded-2xl shadow-2xl max-w-4xl w-full flex flex-col max-h-[90vh] overflow-hidden fade-enter border border-gray-100">
+                            
+                            {/* HEADER LIBRERIA */}
+                            <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-white shrink-0">
+                                <div className="flex items-center gap-4">
+                                    <div className="w-12 h-12 bg-gray-100 rounded-full flex items-center justify-center text-gray-800">
+                                        <i className="ph-bold ph-books text-2xl"></i>
+                                    </div>
+                                    <div>
+                                        <h3 className="text-xl font-black text-gray-900 leading-tight">Libreria Pasti</h3>
+                                        <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">{mealLibrary.length} modelli salvati</span>
+                                    </div>
+                                </div>
+                                <button onClick={() => { setIsLibraryOpen(false); setLibFilter('Tutti'); }} className="w-10 h-10 rounded-full bg-gray-50 hover:bg-gray-100 text-gray-500 transition-colors flex items-center justify-center">
+                                    <i className="ph-bold ph-x text-lg"></i>
+                                </button>
+                            </div>
+
+                            {/* BARRA DEI FILTRI SCROLLABILE (Novità) */}
+                            {mealLibrary.length > 0 && (
+                                <div className="px-6 py-4 bg-white border-b border-gray-100 flex gap-2 overflow-x-auto shrink-0 custom-scrollbar shadow-sm z-10">
+                                    {uniqueTitles.map((title, idx) => (
+                                        <button
+                                            key={idx}
+                                            onClick={() => setLibFilter(title)}
+                                            className={`px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
+                                                libFilter === title 
+                                                ? 'bg-black text-white shadow-md transform scale-105' 
+                                                : 'bg-gray-50 text-gray-600 border border-gray-200 hover:bg-gray-100'
+                                            }`}
+                                        >
+                                            {title}
+                                        </button>
+                                    ))}
+                                </div>
+                            )}
+                            
+                            {/* BODY LIBRERIA / GRIGLIA CARD */}
+                            <div className="flex-1 overflow-y-auto p-6 bg-gray-50/50">
+                                {filteredLibrary.length === 0 ? (
+                                    <div className="flex flex-col items-center justify-center h-full text-gray-400 py-12">
+                                        <i className="ph-thin ph-magnifying-glass text-6xl mb-4 text-gray-300"></i>
+                                        <p className="font-bold text-sm">Nessun pasto trovato per "{libFilter}".</p>
+                                        <button onClick={() => setLibFilter('Tutti')} className="mt-4 text-blue-500 font-bold text-xs hover:underline">
+                                            Torna a Tutti i pasti
+                                        </button>
+                                    </div>
+                                ) : (
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                                        {filteredLibrary.map(libMeal => (
+                                            <div key={libMeal.id} className="bg-white p-5 rounded-2xl border border-gray-200 shadow-sm hover:shadow-md transition-all flex flex-col">
+                                                
+                                                {/* Titolo e Data */}
+                                                <div className="flex justify-between items-start mb-4">
+                                                    <h4 className="font-black text-gray-800 text-base leading-tight pr-2">{libMeal.title}</h4>
+                                                    <span className="text-[10px] font-bold text-gray-500 bg-gray-100 px-2.5 py-1 rounded-md shrink-0">
+                                                        {libMeal.savedAt}
+                                                    </span>
+                                                </div>
+
+                                                {/* LISTA ALIMENTI */}
+                                                <div className="bg-gray-50 p-3 rounded-xl border border-gray-100 mb-4 flex-1">
+                                                    <span className="block text-[9px] font-bold uppercase text-gray-400 mb-2">
+                                                        Composizione ({libMeal.items?.length || 0})
+                                                    </span>
+                                                    <div className="max-h-28 overflow-y-auto space-y-1 pr-1 custom-scrollbar">
+                                                        {libMeal.items?.map((it, idx) => (
+                                                            <div key={idx} className="flex justify-between items-center bg-white p-2 rounded-lg border border-gray-100 text-xs font-bold">
+                                                                <span className="text-gray-700 truncate mr-2">{it.name || 'Alimento'}</span>
+                                                                <span className="text-green-600 shrink-0">{it.weight}g</span>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                </div>
+
+                                                {/* RIASSUNTO MACRO IN LINEA */}
+                                                <div className="flex justify-between items-center py-3 border-y border-gray-100 mb-4">
+                                                    <div className="text-center">
+                                                        <span className="block text-[9px] font-bold uppercase text-gray-400">KCAL</span>
+                                                        <span className="text-sm font-black text-gray-800">{Math.round(libMeal.totals?.kcal || 0)}</span>
+                                                    </div>
+                                                    <div className="text-center">
+                                                        <span className="block text-[9px] font-bold uppercase text-gray-400">PRO</span>
+                                                        <span className="text-sm font-black text-green-600">{libMeal.totals?.p?.toFixed(0) || 0}g</span>
+                                                    </div>
+                                                    <div className="text-center">
+                                                        <span className="block text-[9px] font-bold uppercase text-gray-400">CAR</span>
+                                                        <span className="text-sm font-black text-gray-800">{libMeal.totals?.c?.toFixed(0) || 0}g</span>
+                                                    </div>
+                                                    <div className="text-center">
+                                                        <span className="block text-[9px] font-bold uppercase text-gray-400">FAT</span>
+                                                        <span className="text-sm font-black text-gray-800">{libMeal.totals?.f?.toFixed(0) || 0}g</span>
+                                                    </div>
+                                                </div>
+
+                                                {/* NOTE (se presenti) */}
+                                                {libMeal.note && (
+                                                    <p className="text-xs text-gray-600 italic mb-4 bg-amber-50/50 p-2.5 rounded-xl border border-amber-100/50 leading-relaxed">
+                                                        <i className="ph-fill ph-info mr-1.5 text-amber-500"></i>
+                                                        {libMeal.note}
+                                                    </p>
+                                                )}
+
+                                                {/* TASTI AZIONE */}
+                                                <div className="flex gap-2 mt-auto">
+                                                    <button 
+                                                        onClick={() => { loadFromLibrary(libMeal); setLibFilter('Tutti'); }}
+                                                        className="flex-1 bg-black text-white px-4 py-3 rounded-xl text-xs font-bold hover:bg-gray-800 transition-all flex justify-center items-center gap-2 shadow-lg shadow-gray-200"
+                                                    >
+                                                        <i className="ph-bold ph-download-simple text-sm"></i> Importa nel piano
+                                                    </button>
+                                                    <button 
+                                                        onClick={() => {
+                                                            setMealLibrary(prev => prev.filter(m => m.id !== libMeal.id));
+                                                            // Se eliminiamo l'ultimo pasto di questa categoria, torniamo a "Tutti"
+                                                            const isLastOfKind = filteredLibrary.length === 1;
+                                                            if (isLastOfKind) setLibFilter('Tutti');
+                                                        }}
+                                                        className="px-4 py-3 bg-red-50 text-red-500 rounded-xl text-xs font-bold hover:bg-red-100 transition-colors flex justify-center items-center"
+                                                        title="Elimina modello"
+                                                    >
+                                                        <i className="ph-bold ph-trash text-sm"></i>
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                );
+            })()}
 
 
             
@@ -2022,7 +2517,6 @@ export const DietPlan = ({ patient }) => {
                 const currentMacroTargets = activeDayConfig.macroTargets;
                 const currentDistribution = activeDayConfig.distribution;
 
-                // Usa currentMacroTargets invece di calcData
                 const totalC_kcal = tdee * (currentMacroTargets.c / 100);
                 const totalP_kcal = tdee * (currentMacroTargets.p / 100);
                 const totalF_kcal = tdee * (currentMacroTargets.f / 100);
@@ -2030,27 +2524,34 @@ export const DietPlan = ({ patient }) => {
                 const totalP_g = totalP_kcal / 4;
                 const totalF_g = totalF_kcal / 9;
 
-                // Usa currentDistribution invece di calcData
                 const totalDist = currentDistribution.reduce((acc, curr) => acc + (Number(curr.value) || 0), 0);
                 const totalMacros = currentMacroTargets.c + currentMacroTargets.p + currentMacroTargets.f;
-                
                 const distDiff = Math.abs(100 - totalDist);
                 const errorOpacity = setupTab === 'partizione matriciale' ? Math.min(distDiff * 0.015, 0.2) : 0;
                 const isViewValid = totalDist === 100 && totalMacros === 100; // Questo controlla solo la schermata attuale
                 
                 let isAllValid = true;
-                if (calcData.matrixMode === 'global') {
-                    isAllValid = (totalMacros === 100 && totalDist === 100);
-                } else {
-                    isAllValid = dietDays.every(day => {
-                        const dayConfig = calcData.dailyConfigs[day.id] || { macroTargets: calcData.macroTargets, distribution: calcData.distribution };
-                        const mSum = dayConfig.macroTargets.c + dayConfig.macroTargets.p + dayConfig.macroTargets.f;
-                        const dSum = dayConfig.distribution.reduce((acc, curr) => acc + (Number(curr.value) || 0), 0);
-                        return mSum === 100 && dSum === 100;
-                    });
+
+                    if (calcData.matrixMode === 'global') {
+                        // In modalità globale controlla solo il target principale
+                        isAllValid = (totalMacros === 100 && totalDist === 100);
+                    } else {
+                        // In modalità PRO, controlla ogni singolo giorno nel piano
+                        isAllValid = dietDays.every(day => {
+                            const dayConfig = calcData.dailyConfigs[day.id] || { 
+                                macroTargets: calcData.macroTargets, 
+                                distribution: calcData.distribution 
+                            };
+                            const mSum = dayConfig.macroTargets.c + dayConfig.macroTargets.p + dayConfig.macroTargets.f;
+                            const dSum = dayConfig.distribution.reduce((acc, curr) => acc + (Number(curr.value) || 0), 0);
+                            return mSum === 100 && dSum === 100;
+                        });
+                    
 }
                 
-                const bgDynamicColor = isViewValid && setupTab === 'partizione matriciale' ? '#F2FFF7' : `rgba(255, 59, 48, ${errorOpacity})`;                return (
+                const bgDynamicColor = isViewValid && setupTab === 'partizione matriciale' ? '#F2FFF7' : `rgba(255, 59, 48, ${errorOpacity})`;                
+                
+                return (
                     <div className="modal-backdrop">
                         {/* FINESTRA PRINCIPALE SQUIRCLE */}
                         <div className="modal-window" style={{ width: '900px', maxWidth: '95%', height: '90vh', display: 'flex', flexDirection: 'column' }}>
@@ -2189,7 +2690,7 @@ export const DietPlan = ({ patient }) => {
                                                 className={`segmented-btn ${!isDailyMode ? 'active' : ''}`} 
                                                 onClick={() => setCalcData({...calcData, matrixMode: 'global'})} 
                                                 style={{ flex: 1, padding: '12px', fontSize: '13px', fontWeight: 800 }}>
-                                                🌍 Struttura Globale
+                                                Generale
                                             </button>
                                             <button 
                                                 className={`segmented-btn ${isDailyMode ? 'active' : ''}`} 
@@ -2207,7 +2708,7 @@ export const DietPlan = ({ patient }) => {
                                                     }); 
                                                 }} 
                                                 style={{ flex: 1, padding: '12px', fontSize: '13px', fontWeight: 800 }}>
-                                                ⚡️ PRO: Giorno per Giorno
+                                                Giorno per Giorno
                                             </button>
                                         </div>
 
@@ -2237,7 +2738,7 @@ export const DietPlan = ({ patient }) => {
                                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
                                                 <span className="smart-title" style={{ margin: 0 }}>Distribuzione Macronutrienti (%)</span>
                                                 <span style={{ fontSize: '12px', fontWeight: 800, color: (calcData.macroTargets.c + calcData.macroTargets.p + calcData.macroTargets.f) === 100 ? '#00C853' : '#FF3B30' }}>
-                                                    TOTALE: {calcData.macroTargets.c + calcData.macroTargets.p + calcData.macroTargets.f}%
+                                                    TOTALE: {currentMacroTargets.c + currentMacroTargets.p + currentMacroTargets.f}%
                                                 </span>
                                             </div>
                                             <div style={{ display: 'flex', gap: '20px' }}>
@@ -2335,13 +2836,33 @@ export const DietPlan = ({ patient }) => {
                                         setTargets({ kcal: tdee, c: calcData.macroTargets.c, p: calcData.macroTargets.p, f: calcData.macroTargets.f, isConfigured: true });
 
                                         setDietDays(prevDays => prevDays.map(day => {
-                                            const dayConfig = calcData.matrixMode === 'daily' && calcData.dailyConfigs[day.id] ? calcData.dailyConfigs[day.id] : { macroTargets: calcData.macroTargets, distribution: calcData.distribution };
-                                            const syncedMeals = dayConfig.distribution.map(distMeal => {
-                                                const existingMeal = day.meals?.find(m => m.title.toLowerCase() === distMeal.name.toLowerCase());
-                                                return { id: existingMeal ? existingMeal.id : genId(), title: distMeal.name, items: existingMeal ? existingMeal.items : [] };
-                                            });
-                                            return { ...day, meals: syncedMeals, targets: { kcal: tdee, ...dayConfig.macroTargets } };
-                                        }));
+    // 1. Identifica la configurazione corretta (Daily o Global)
+    const dayConfig = calcData.matrixMode === 'daily' && calcData.dailyConfigs[day.id] 
+        ? calcData.dailyConfigs[day.id] 
+        : { macroTargets: calcData.macroTargets, distribution: calcData.distribution };
+
+    // 2. Sincronizza i pasti: 
+    // Crea la nuova lista basandoti ESATTAMENTE sulla distribuzione definita nel setup
+    const syncedMeals = dayConfig.distribution.map(distMeal => {
+        // Cerca se esiste già un pasto con lo stesso ID o Nome per non perdere gli alimenti già inseriti
+        const existingMeal = day.meals?.find(m => 
+            m.title.toLowerCase() === distMeal.name.toLowerCase()
+        );
+
+        return { 
+            id: existingMeal ? existingMeal.id : genId(), // Mantieni ID se esiste, altrimenti nuovo
+            title: distMeal.name, 
+            items: existingMeal ? existingMeal.items : [] // Mantieni gli alimenti se il pasto esisteva
+        };
+    });
+
+    // 3. Ritorna il giorno aggiornato con la nuova struttura pasti e i nuovi target
+    return { 
+        ...day, 
+        meals: syncedMeals, 
+        targets: { kcal: tdee, ...dayConfig.macroTargets } 
+    };
+}));
                                         setIsSetupOpen(false);
                                     }}
                                     style={{ 
@@ -2362,96 +2883,284 @@ export const DietPlan = ({ patient }) => {
             })()}
 
             {/* --- MODALE DATABASE ALIMENTI --- */}
+            {/* --- MODALE DATABASE ALIMENTI AVANZATO --- */}
             {isDbOpen && (
-                <div className="modal-backdrop">
-                    <div className="modal-window">
+                <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-6xl flex flex-col h-[90vh] overflow-hidden fade-enter border border-gray-100">
                         
-                        {/* HEADER DATABASE */}
-                        <div style={{ padding: '25px 40px', borderBottom: '1px solid #F0F0F2', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <div>
-                                <h3 style={{ fontSize: '22px', fontWeight: 800, margin: 0, color: '#1D1D1F' }}>Gestione Database Alimenti</h3>
-                                <span style={{ fontSize: '12px', color: '#86868B', fontWeight: 600 }}>{foodDB.length} alimenti registrati</span>
+                        {/* HEADER */}
+                        <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-white shrink-0">
+                            <div className="flex items-center gap-4">
+                                <div className="w-12 h-12 bg-gray-100 rounded-full flex items-center justify-center text-gray-800">
+                                    <i className="ph-bold ph-database text-2xl"></i>
+                                </div>
+                                <div>
+                                    <h3 className="text-xl font-black text-gray-900 leading-tight">Database Nutrizionale CREA</h3>
+                                    <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">{foodDB.length} alimenti in memoria</span>
+                                </div>
                             </div>
-                            <button onClick={() => setIsDbOpen(false)} style={{ border: 'none', background: 'transparent', fontSize: '20px', cursor: 'pointer', color: '#86868B', fontWeight: 800 }}>X</button>
-                        </div>
-                        
-                        {/* BARRA INSERIMENTO NUOVO ALIMENTO */}
-                        <div style={{ padding: '20px 40px', background: '#FAFAFC', borderBottom: '1px solid #E5E5EA', display: 'grid', gridTemplateColumns: '2fr 1.5fr 1fr 1fr 1fr 1fr 50px', gap: '10px', alignItems: 'center' }}>
-                            <input type="text" placeholder="Nome Alimento" value={newFood.name} onChange={e => setNewFood({...newFood, name: e.target.value})} style={{ padding: '12px', borderRadius: '8px', border: '1px solid #E5E5EA', fontSize: '14px', fontWeight: 600, outline: 'none' }} />
-                            <input type="text" placeholder="Categoria (es. Frutta)" value={newFood.category} onChange={e => setNewFood({...newFood, category: e.target.value})} style={{ padding: '12px', borderRadius: '8px', border: '1px solid #E5E5EA', fontSize: '14px', outline: 'none' }} />
-                            <input type="number" placeholder="Kcal" value={newFood.kcal} onChange={e => setNewFood({...newFood, kcal: e.target.value})} style={{ padding: '12px', borderRadius: '8px', border: '1px solid #E5E5EA', fontSize: '14px', outline: 'none' }} />
-                            <input type="number" placeholder="Pro (g)" value={newFood.p} onChange={e => setNewFood({...newFood, p: e.target.value})} style={{ padding: '12px', borderRadius: '8px', border: '1px solid #E5E5EA', fontSize: '14px', outline: 'none' }} />
-                            <input type="number" placeholder="Car (g)" value={newFood.c} onChange={e => setNewFood({...newFood, c: e.target.value})} style={{ padding: '12px', borderRadius: '8px', border: '1px solid #E5E5EA', fontSize: '14px', outline: 'none' }} />
-                            <input type="number" placeholder="Fat (g)" value={newFood.f} onChange={e => setNewFood({...newFood, f: e.target.value})} style={{ padding: '12px', borderRadius: '8px', border: '1px solid #E5E5EA', fontSize: '14px', outline: 'none' }} />
-                            <button onClick={addFoodToDB} style={{ background: '#00C853', color: 'white', border: 'none', borderRadius: '8px', height: '100%', fontWeight: 800, cursor: 'pointer', fontSize: '18px' }}>+</button>
-                        </div>
-
-                        {/* BARRA DI RICERCA */}
-                        <div style={{ padding: '20px 40px', background: '#FFFFFF' }}>
-                            <input 
-                                type="text" placeholder="Cerca nel database..." 
-                                value={dbSearch} onChange={e => setDbSearch(e.target.value)} 
-                                style={{ width: '100%', padding: '12px 16px', borderRadius: '12px', border: '1px solid #E5E5EA', fontSize: '14px', fontWeight: 600, background: '#F9F9FB', outline: 'none' }} 
-                            />
-                        </div>
-
-                        {/* TABELLA DATABASE (Modificabile in linea) */}
-                        <div style={{ flex: 1, overflowY: 'auto', padding: '0 40px 20px' }}>
-                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '14px' }}>
-                                <thead>
-                                    <tr>
-                                        <th style={{ width:'30%', position: 'sticky', top: 0, background: '#FFFFFF', padding: '12px 10px', textAlign: 'left', fontSize: '11px', textTransform: 'uppercase', color: '#86868B', borderBottom: '2px solid #F0F0F2', zIndex: 2 }}>Alimento</th>
-                                        <th style={{ width:'20%', position: 'sticky', top: 0, background: '#FFFFFF', padding: '12px 10px', textAlign: 'left', fontSize: '11px', textTransform: 'uppercase', color: '#86868B', borderBottom: '2px solid #F0F0F2', zIndex: 2 }}>Categoria</th>
-                                        <th style={{ width:'12%', position: 'sticky', top: 0, background: '#FFFFFF', padding: '12px 10px', textAlign: 'left', fontSize: '11px', textTransform: 'uppercase', color: '#86868B', borderBottom: '2px solid #F0F0F2', zIndex: 2 }}>Kcal</th>
-                                        <th style={{ width:'12%', position: 'sticky', top: 0, background: '#FFFFFF', padding: '12px 10px', textAlign: 'left', fontSize: '11px', textTransform: 'uppercase', color: '#86868B', borderBottom: '2px solid #F0F0F2', zIndex: 2 }}>Pro</th>
-                                        <th style={{ width:'12%', position: 'sticky', top: 0, background: '#FFFFFF', padding: '12px 10px', textAlign: 'left', fontSize: '11px', textTransform: 'uppercase', color: '#86868B', borderBottom: '2px solid #F0F0F2', zIndex: 2 }}>Car</th>
-                                        <th style={{ width:'12%', position: 'sticky', top: 0, background: '#FFFFFF', padding: '12px 10px', textAlign: 'left', fontSize: '11px', textTransform: 'uppercase', color: '#86868B', borderBottom: '2px solid #F0F0F2', zIndex: 2 }}>Fat</th>
-                                        <th style={{ width:'5%', position: 'sticky', top: 0, background: '#FFFFFF', padding: '12px 10px', borderBottom: '2px solid #F0F0F2', zIndex: 2 }}></th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {foodDB.map((f, index) => {
-                                        // Filtro di ricerca testuale
-                                        if (dbSearch && !f.name.toLowerCase().includes(dbSearch.toLowerCase()) && !f.category.toLowerCase().includes(dbSearch.toLowerCase())) return null;
-                                        return (
-                                            <tr key={index} style={{ borderBottom: '1px solid #F5F5F7' }}>
-                                                <td style={{ padding: '8px' }}><input value={f.name} onChange={e => updateDbFood(index, 'name', e.target.value)} style={{ width: '100%', border: '1px solid transparent', background: 'transparent', padding: '8px', borderRadius: '6px', fontSize: '14px', fontWeight: 600, color: '#1D1D1F', outline: 'none' }}/></td>
-                                                <td style={{ padding: '8px' }}><input value={f.category} onChange={e => updateDbFood(index, 'category', e.target.value)} style={{ width: '100%', border: '1px solid transparent', background: 'transparent', padding: '8px', borderRadius: '6px', fontSize: '14px', color: '#86868B', outline: 'none' }}/></td>
-                                                <td style={{ padding: '8px' }}><input type="number" value={f.kcal} onChange={e => updateDbFood(index, 'kcal', e.target.value)} style={{ width: '100%', border: '1px solid transparent', background: 'transparent', padding: '8px', borderRadius: '6px', fontSize: '14px', fontWeight: 700, color: '#1D1D1F', outline: 'none' }}/></td>
-                                                <td style={{ padding: '8px' }}><input type="number" value={f.p} onChange={e => updateDbFood(index, 'p', e.target.value)} style={{ width: '100%', border: '1px solid transparent', background: 'transparent', padding: '8px', borderRadius: '6px', fontSize: '14px', color: '#1D1D1F', outline: 'none' }}/></td>
-                                                <td style={{ padding: '8px' }}><input type="number" value={f.c} onChange={e => updateDbFood(index, 'c', e.target.value)} style={{ width: '100%', border: '1px solid transparent', background: 'transparent', padding: '8px', borderRadius: '6px', fontSize: '14px', color: '#1D1D1F', outline: 'none' }}/></td>
-                                                <td style={{ padding: '8px' }}><input type="number" value={f.f} onChange={e => updateDbFood(index, 'f', e.target.value)} style={{ width: '100%', border: '1px solid transparent', background: 'transparent', padding: '8px', borderRadius: '6px', fontSize: '14px', color: '#1D1D1F', outline: 'none' }}/></td>
-                                                <td style={{ padding: '8px', textAlign: 'center' }}>
-                                                    <button onClick={() => deleteFoodDB(index)} style={{ background: 'transparent', border: 'none', color: '#FF3B30', fontWeight: 800, cursor: 'pointer', padding: '8px' }}>X</button>
-                                                </td>
-                                            </tr>
-                                        )
-                                    })}
-                                </tbody>
-                            </table>
-                        </div>
-
-                        {/* FOOTER DATABASE (Import/Export e Reset) */}
-                        <div style={{ padding: '20px 40px', borderTop: '1px solid #E5E5EA', background: '#FFFFFF', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <div style={{ display: 'flex', gap: '15px' }}>
-                                <button style={{ background: '#F5F5F7', border: 'none', padding: '10px 20px', borderRadius: '8px', cursor: 'pointer', fontSize: '13px', fontWeight: 600, color: '#1D1D1F' }} onClick={exportJSON}>
-                                    Esporta Backup (JSON)
-                                </button>
-                                <button style={{ background: '#F5F5F7', border: 'none', padding: '10px 20px', borderRadius: '8px', cursor: 'pointer', fontSize: '13px', fontWeight: 600, color: '#1D1D1F' }} onClick={() => fileInputRef.current.click()}>
-                                    Importa Dati
-                                </button>
-                                <input type="file" ref={fileInputRef} accept=".json" style={{ display: 'none' }} onChange={importJSON} />
-                            </div>
-                            
-                            <button style={{ color: '#FF3B30', background: 'transparent', border: 'none', fontSize: '13px', fontWeight: 700, cursor: 'pointer', textDecoration: 'underline' }} onClick={resetDatabase}>
-                                Ripristina Database di Default
+                            <button onClick={() => { setIsDbOpen(false); setEditingFood(null); }} className="w-10 h-10 rounded-full bg-gray-50 hover:bg-gray-100 text-gray-500 transition-colors flex items-center justify-center">
+                                <i className="ph-bold ph-x text-lg"></i>
                             </button>
                         </div>
 
-                        
+                        {/* --- VISTA 1: LISTA ALIMENTI --- */}
+                        {!editingFood && (
+                            <div className="flex flex-col flex-1 overflow-hidden bg-gray-50/50">
+                                {/* BARRA AZIONI (Ricerca, Aggiungi, Import/Export) */}
+                                <div className="p-4 bg-white border-b border-gray-100 flex flex-wrap gap-4 items-center justify-between shrink-0">
+                                    <div className="relative flex-1 min-w-[250px]">
+                                        <i className="ph-bold ph-magnifying-glass absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 text-lg"></i>
+                                        <input 
+                                            type="text" placeholder="Cerca alimento o categoria..." 
+                                            value={dbSearch} onChange={e => setDbSearch(e.target.value)} 
+                                            className="w-full pl-11 pr-4 py-3 rounded-xl border border-gray-200 text-sm font-bold text-gray-800 focus:border-green-500 focus:ring-2 focus:ring-green-100 outline-none transition-all bg-gray-50 focus:bg-white"
+                                        />
+                                    </div>
+                                    <div className="flex gap-2">
+                                        <button onClick={() => fileInputRef.current.click()} className="px-4 py-3 bg-white border border-gray-200 text-gray-700 rounded-xl text-xs font-bold hover:bg-gray-50 transition-colors flex items-center gap-2">
+                                            <i className="ph-bold ph-upload-simple"></i> Importa JSON
+                                        </button>
+                                        <input type="file" ref={fileInputRef} accept=".json" style={{ display: 'none' }} onChange={importJSON} />
+                                        
+                                        <button onClick={exportJSON} className="px-4 py-3 bg-white border border-gray-200 text-gray-700 rounded-xl text-xs font-bold hover:bg-gray-50 transition-colors flex items-center gap-2">
+                                            <i className="ph-bold ph-download-simple"></i> Esporta JSON
+                                        </button>
+                                        
+                                        <button onClick={() => setEditingFood({...emptyFoodTemplate})} className="px-5 py-3 bg-black text-white rounded-xl text-xs font-bold hover:bg-gray-800 transition-colors flex items-center gap-2 shadow-lg shadow-gray-200 ml-2">
+                                            <i className="ph-bold ph-plus"></i> Nuovo Alimento
+                                        </button>
+                                    </div>
+                                </div>
+
+                                {/* TABELLA DATI */}
+                                <div className="flex-1 overflow-y-auto p-6">
+                                    <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+                                        <table className="w-full text-left border-collapse">
+                                            <thead className="bg-gray-50 sticky top-0 z-10 border-b border-gray-200">
+                                                <tr>
+                                                    <th className="p-4 text-[10px] font-black uppercase text-gray-400 tracking-wider">Alimento</th>
+                                                    <th className="p-4 text-[10px] font-black uppercase text-gray-400 tracking-wider">Categoria</th>
+                                                    <th className="p-4 text-[10px] font-black uppercase text-gray-400 tracking-wider text-center">Kcal</th>
+                                                    <th className="p-4 text-[10px] font-black uppercase text-gray-400 tracking-wider text-center text-green-600">Pro</th>
+                                                    <th className="p-4 text-[10px] font-black uppercase text-gray-400 tracking-wider text-center">Car</th>
+                                                    <th className="p-4 text-[10px] font-black uppercase text-gray-400 tracking-wider text-center">Fat</th>
+                                                    <th className="p-4 text-[10px] font-black uppercase text-gray-400 tracking-wider text-center">Azioni</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-gray-100">
+                                                {foodDB.filter(f => !dbSearch || f.name.toLowerCase().includes(dbSearch.toLowerCase()) || f.category.toLowerCase().includes(dbSearch.toLowerCase())).map((f, index) => (
+                                                    <tr key={index} className="hover:bg-gray-50 transition-colors group">
+                                                        <td className="p-4">
+                                                            <div className="font-bold text-sm text-gray-900">{f.name}</div>
+                                                            {f.scientific_name && <div className="text-[10px] text-gray-400 italic">{f.scientific_name}</div>}
+                                                        </td>
+                                                        <td className="p-4 text-xs font-bold text-gray-500">{f.category}</td>
+                                                        <td className="p-4 text-sm font-black text-gray-800 text-center">{f.energy_kcal || f.kcal || 0}</td>
+                                                        <td className="p-4 text-sm font-black text-green-600 text-center">{f.proteins || f.p || 0}</td>
+                                                        <td className="p-4 text-sm font-black text-gray-800 text-center">{f.available_carbohydrates || f.c || 0}</td>
+                                                        <td className="p-4 text-sm font-black text-gray-800 text-center">{f.lipids || f.f || 0}</td>
+                                                        <td className="p-4 text-center">
+                                                            <div className="flex gap-2 justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                                                                <button onClick={() => setEditingFood({ ...f, _editIndex: foodDB.indexOf(f) })} className="w-8 h-8 rounded-lg bg-gray-100 hover:bg-blue-100 hover:text-blue-600 flex items-center justify-center transition-colors">
+                                                                    <i className="ph-bold ph-pencil-simple"></i>
+                                                                </button>
+                                                                <button onClick={() => deleteFoodDB(foodDB.indexOf(f))} className="w-8 h-8 rounded-lg bg-gray-100 hover:bg-red-100 hover:text-red-600 flex items-center justify-center transition-colors">
+                                                                    <i className="ph-bold ph-trash"></i>
+                                                                </button>
+                                                            </div>
+                                                        </td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* --- VISTA 2: EDITOR AVANZATO (80+ CAMPI) --- */}
+                        {editingFood && (
+                            <div className="flex flex-col flex-1 overflow-hidden bg-gray-50">
+                                {/* Header Editor */}
+                                <div className="px-6 py-4 bg-white border-b border-gray-100 flex justify-between items-center shrink-0">
+                                    <div className="flex items-center gap-3">
+                                        <button onClick={() => setEditingFood(null)} className="w-8 h-8 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center transition-colors mr-2">
+                                            <i className="ph-bold ph-arrow-left"></i>
+                                        </button>
+                                        <h4 className="font-black text-lg text-gray-900">{editingFood._editIndex !== undefined ? 'Modifica Alimento' : 'Nuovo Alimento'}</h4>
+                                    </div>
+                                    <div className="flex gap-2">
+                                        <button onClick={handleSaveEditedFood} className="px-5 py-2.5 bg-green-500 text-white rounded-xl text-xs font-bold hover:bg-green-600 transition-colors shadow-lg shadow-green-200 flex items-center gap-2">
+                                            <i className="ph-bold ph-floppy-disk"></i> Salva nel Database
+                                        </button>
+                                    </div>
+                                </div>
+
+                                {/* Tabs Navigazione Editor */}
+                                <div className="px-6 pt-4 bg-white border-b border-gray-100 flex gap-2 overflow-x-auto shrink-0 custom-scrollbar">
+                                    {[
+                                        {id: 'base', icon: 'ph-info', label: 'Info Base'},
+                                        {id: 'macro', icon: 'ph-chart-pie-slice', label: 'Macro & Energia'},
+                                        {id: 'micro', icon: 'ph-drop', label: 'Vitamine & Minerali'},
+                                        {id: 'grassi', icon: 'ph-flask', label: 'Acidi Grassi'},
+                                        {id: 'amino', icon: 'ph-dna', label: 'Aminoacidi'},
+                                        {id: 'altro', icon: 'ph-leaf', label: 'Altri Composti'}
+                                    ].map(tab => (
+                                        <button 
+                                            key={tab.id} onClick={() => setEditorTab(tab.id)}
+                                            className={`px-4 py-3 rounded-t-xl text-xs font-bold flex items-center gap-2 border-b-2 transition-colors ${editorTab === tab.id ? 'border-black text-black bg-gray-50/50' : 'border-transparent text-gray-400 hover:bg-gray-50 hover:text-gray-600'}`}
+                                        >
+                                            <i className={`ph-bold ${tab.icon} text-lg`}></i> {tab.label}
+                                        </button>
+                                    ))}
+                                </div>
+
+                                {/* Form Dinamico a Griglia */}
+                                <div className="flex-1 overflow-y-auto p-6">
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                                        
+                                        {editorTab === 'base' && (
+                                            <>
+                                                {['name', 'category', 'food_code', 'scientific_name', 'english_name'].map(key => (
+                                                    <div key={key}>
+                                                        <label className="block text-[10px] font-bold uppercase text-gray-400 mb-1">{key.replace(/_/g, ' ')}</label>
+                                                        <input type="text" value={editingFood[key] || ''} onChange={e => setEditingFood({...editingFood, [key]: e.target.value})} className="w-full p-3 rounded-xl border border-gray-200 text-sm font-bold focus:border-green-500 outline-none" />
+                                                    </div>
+                                                ))}
+                                                {['portion', 'edible_part'].map(key => (
+                                                    <div key={key}>
+                                                        <label className="block text-[10px] font-bold uppercase text-gray-400 mb-1">{key.replace(/_/g, ' ')}</label>
+                                                        <input type="number" step="0.1" value={editingFood[key] || 0} onChange={e => setEditingFood({...editingFood, [key]: Number(e.target.value)})} className="w-full p-3 rounded-xl border border-gray-200 text-sm font-bold focus:border-green-500 outline-none bg-gray-50" />
+                                                    </div>
+                                                ))}
+                                            </>
+                                        )}
+
+                                        {editorTab === 'macro' && (
+                                            <>
+                                                <div className="md:col-span-3 pb-2 border-b border-gray-200 mb-2 font-black text-gray-800">Primari</div>
+                                                {['energy_kcal', 'energy_kj', 'water', 'proteins', 'lipids', 'available_carbohydrates', 'total_fiber', 'cholesterol', 'alcohol'].map(key => (
+                                                    <div key={key}>
+                                                        <label className="block text-[10px] font-bold uppercase text-gray-400 mb-1">{key.replace(/_/g, ' ')}</label>
+                                                        <input type="number" step="0.1" value={editingFood[key] || 0} onChange={e => setEditingFood({...editingFood, [key]: Number(e.target.value)})} className="w-full p-3 rounded-xl border border-gray-200 text-sm font-bold focus:border-green-500 outline-none" />
+                                                    </div>
+                                                ))}
+                                                <div className="md:col-span-3 pt-4 pb-2 border-b border-gray-200 mb-2 font-black text-gray-800 mt-4">Carboidrati e Fibre (Dettaglio)</div>
+                                                {['starch', 'soluble_sugars', 'sucrose', 'glucose', 'fructose', 'lactose', 'galactose', 'maltose', 'soluble_fiber', 'insoluble_fiber'].map(key => (
+                                                    <div key={key}>
+                                                        <label className="block text-[10px] font-bold uppercase text-gray-400 mb-1">{key.replace(/_/g, ' ')}</label>
+                                                        <input type="number" step="0.1" value={editingFood[key] || 0} onChange={e => setEditingFood({...editingFood, [key]: Number(e.target.value)})} className="w-full p-3 rounded-xl border border-gray-200 text-sm font-bold focus:border-green-500 outline-none" />
+                                                    </div>
+                                                ))}
+                                            </>
+                                        )}
+
+                                        {/* PER BREVITÀ DEL CODICE: Generatore automatico per gli altri TAB */}
+                                        {editorTab === 'micro' && ['sodium', 'potassium', 'calcium', 'magnesium', 'phosphorus', 'iron', 'copper', 'zinc', 'selenium', 'iodine', 'vitamin_a_retinol_equivalent', 'retinol', 'beta_carotene', 'thiamine', 'riboflavin', 'niacin', 'vitamin_c', 'vitamin_d', 'vitamin_e', 'folate', 'vitamin_b12', 'vitamin_k'].map(key => (
+                                            <div key={key}>
+                                                <label className="block text-[10px] font-bold uppercase text-gray-400 mb-1">{key.replace(/_/g, ' ')}</label>
+                                                <input type="number" step="0.01" value={editingFood[key] || 0} onChange={e => setEditingFood({...editingFood, [key]: Number(e.target.value)})} className="w-full p-3 rounded-xl border border-gray-200 text-sm font-bold focus:border-green-500 outline-none" />
+                                            </div>
+                                        ))}
+
+                                        {editorTab === 'grassi' && ['Saturated_fatty_acids', 'monounsaturated_fatty_acids', 'polyunsaturated_fatty_acids', 'C16:0_palmitic_acid', 'C18:0_stearic_acid', 'C18:1_oleic_acid', 'C18:2_linoleic_acid', 'C18:3_linolenic_acid', 'C20:4_arachidonic_acid', 'C20:5_eicosapentaenoic_acid_EPA', 'C22:6_docosahexaenoic_acid_DHA'].map(key => (
+                                            <div key={key}>
+                                                <label className="block text-[10px] font-bold uppercase text-gray-400 mb-1 truncate" title={key}>{key.replace(/_/g, ' ')}</label>
+                                                <input type="number" step="0.01" value={editingFood[key] || 0} onChange={e => setEditingFood({...editingFood, [key]: Number(e.target.value)})} className="w-full p-3 rounded-xl border border-gray-200 text-sm font-bold focus:border-green-500 outline-none" />
+                                            </div>
+                                        ))}
+
+                                        {editorTab === 'amino' && ['alanine', 'arginine', 'aspartic_acid', 'cystine', 'glutamic_acid', 'glycine', 'histidine', 'isoleucine', 'leucine', 'lysine', 'methionine', 'phenylalanine', 'proline', 'serine', 'threonine', 'tryptophan', 'tyrosine', 'valine', 'chemical_index'].map(key => (
+                                            <div key={key}>
+                                                <label className="block text-[10px] font-bold uppercase text-gray-400 mb-1 truncate">{key.replace(/_/g, ' ')}</label>
+                                                <input type="number" step="0.01" value={editingFood[key] || 0} onChange={e => setEditingFood({...editingFood, [key]: Number(e.target.value)})} className="w-full p-3 rounded-xl border border-gray-200 text-sm font-bold focus:border-green-500 outline-none" />
+                                            </div>
+                                        ))}
+
+                                        {editorTab === 'altro' && ['caffeic_acid', 'citric_acid', 'phytic_acid', 'malic_acid', 'apigenin', 'antioxidant_activity', 'campferol', 'phytosterols', 'fructo-oligosaccharides', 'myricetin', 'polyphenols', 'quercetin'].map(key => (
+                                            <div key={key}>
+                                                <label className="block text-[10px] font-bold uppercase text-gray-400 mb-1 truncate">{key.replace(/_/g, ' ')}</label>
+                                                <input type="number" step="0.01" value={editingFood[key] || 0} onChange={e => setEditingFood({...editingFood, [key]: Number(e.target.value)})} className="w-full p-3 rounded-xl border border-gray-200 text-sm font-bold focus:border-green-500 outline-none" />
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
                     </div>
                 </div>
             )}
+
+            {isSaveModalOpen && mealToSave && (
+    <div className="modal-backdrop" style={{ zIndex: 12000 }}>
+        <div className="modal-window" style={{ maxWidth: '450px', height: 'auto', padding: '30px' }}>
+            <div className="save-modal-icon">
+                <SaveIcon />
+            </div>
+            
+            <h3 style={{ textAlign: 'center', fontSize: '20px', fontWeight: 900, marginBottom: '10px' }}>Salva nella Libreria</h3>
+            <p style={{ textAlign: 'center', fontSize: '13px', color: '#86868B', marginBottom: '25px' }}>
+                Verrà creato un riferimento globale riutilizzabile in qualsiasi piano.
+            </p>
+
+            <div className="t-input-floating">
+                <label>Nome del Pasto</label>
+                <input 
+                    type="text" 
+                    value={mealToSave.customName} 
+                    onChange={e => setMealToSave({...mealToSave, customName: e.target.value})}
+                    placeholder="Es: Colazione Proteica Standard"
+                />
+            </div>
+
+            {/* ANTEPRIMA CONTENUTO (Quello che hai chiesto: non solo macro) */}
+            <div style={{ background: '#F9F9FB', padding: '20px', borderRadius: '18px', border: '1px solid #E5E5EA', marginBottom: '25px' }}>
+                <span style={{ fontSize: '10px', fontWeight: 800, color: '#86868B', textTransform: 'uppercase', display: 'block', marginBottom: '12px' }}>
+                    Anteprima Alimenti ({mealToSave.items.length})
+                </span>
+                <div style={{ maxHeight: '120px', overflowY: 'auto', marginBottom: '15px' }}>
+                    {mealToSave.items.map((it, idx) => (
+                        <div key={idx} className="preview-badge">
+                            <span>{it.name || 'Alimento'}</span>
+                            <span style={{ color: '#00C853' }}>{it.weight}g</span>
+                        </div>
+                    ))}
+                </div>
+                
+                {/* Caratteristiche Macro in linea */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid #E5E5EA', paddingTop: '10px' }}>
+                    <div style={{ textAlign: 'center' }}><div style={{fontSize: '9px', fontWeight: 800, color: '#86868B'}}>KCAL</div><div style={{fontSize: '14px', fontWeight: 900}}>{calculateTotals(mealToSave.items).kcal.toFixed(0)}</div></div>
+                    <div style={{ textAlign: 'center' }}><div style={{fontSize: '9px', fontWeight: 800, color: '#86868B'}}>PRO</div><div style={{fontSize: '14px', fontWeight: 900, color: '#00C853'}}>{calculateTotals(mealToSave.items).p.toFixed(0)}g</div></div>
+                    <div style={{ textAlign: 'center' }}><div style={{fontSize: '9px', fontWeight: 800, color: '#86868B'}}>CAR</div><div style={{fontSize: '14px', fontWeight: 900}}>{calculateTotals(mealToSave.items).c.toFixed(0)}g</div></div>
+                    <div style={{ textAlign: 'center' }}><div style={{fontSize: '9px', fontWeight: 800, color: '#86868B'}}>FAT</div><div style={{fontSize: '14px', fontWeight: 900}}>{calculateTotals(mealToSave.items).f.toFixed(0)}g</div></div>
+                </div>
+            </div>
+
+            <textarea 
+                placeholder="Aggiungi una nota clinica (es: Post-Workout)..."
+                value={mealToSave.note}
+                onChange={e => setMealToSave({...mealToSave, note: e.target.value})}
+                style={{ width: '100%', padding: '12px', borderRadius: '12px', border: '1px solid #E5E5EA', fontSize: '13px', marginBottom: '20px', minHeight: '60px', outline: 'none' }}
+            />
+
+            <div style={{ display: 'flex', gap: '12px' }}>
+                <button 
+                    onClick={() => setIsSaveModalOpen(false)}
+                    style={{ flex: 1, padding: '14px', borderRadius: '12px', border: 'none', background: '#F2F2F7', fontWeight: 700, cursor: 'pointer' }}
+                >
+                    Annulla
+                </button>
+                <button 
+                    onClick={confirmSaveToLibrary}
+                    style={{ flex: 1, padding: '14px', borderRadius: '12px', border: 'none', background: '#1D1D1F', color: 'white', fontWeight: 700, cursor: 'pointer', boxShadow: '0 8px 16px rgba(0,0,0,0.1)' }}
+                >
+                    Salva Modifiche
+                </button>
+            </div>
+        </div>
+    </div>
+)}
             {/* --- MODALE SMART CHART MAKER --- */}
             {isSmartOpen && (
                 <div className="modal-backdrop">
@@ -2547,6 +3256,199 @@ export const DietPlan = ({ patient }) => {
                     </div>
                 </div>
             )}
+
+            {/* --- MODALE ANALISI CLINICA AVANZATA --- */}
+            {isAnalysisOpen && (() => {
+                const patientTargets = getPatientTargets();
+                const currentProfile = analyzeCompleteBioProfile(dietDays); // La funzione che somma i nutrienti (dal messaggio precedente)
+                
+                // Moltiplicatori in base al timeframe
+                let multiplier = 1;
+                let timeframeLabel = "Giornaliero";
+                if (analysisTimeframe === 'week') { multiplier = 7; timeframeLabel = "Settimanale"; }
+                if (analysisTimeframe === 'meal') { multiplier = 0.33; timeframeLabel = "Pasto (Stima 33%)"; } // Semplificazione per il target del pasto
+
+                return (
+                    <div className="fixed inset-0 z-[13000] flex items-center justify-center p-4 bg-black/80 backdrop-blur-xl fade-enter">
+                        <div className="bg-white rounded-[32px] shadow-2xl w-full max-w-7xl h-[95vh] flex flex-col overflow-hidden border border-white/20">
+                            
+                            {/* 1. RECAP PAZIENTE MINIMAL */}
+                            <div className="bg-gray-900 text-white p-4 shrink-0 flex items-center justify-between">
+                                <div className="flex items-center gap-6">
+                                    <div className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center border border-white/20">
+                                        <i className="ph-fill ph-user text-xl"></i>
+                                    </div>
+                                    <div className="flex items-center gap-4 text-xs">
+                                        <div><span className="text-gray-400 block text-[9px] uppercase font-bold tracking-wider">Paziente</span><span className="font-black text-sm">{patientProfile.name}</span></div>
+                                        <div className="w-px h-6 bg-white/20"></div>
+                                        <div><span className="text-gray-400 block text-[9px] uppercase font-bold tracking-wider">Bio</span><span className="font-bold">{patientProfile.age} anni, {patientProfile.gender === 'Male' ? 'Uomo' : 'Donna'}, {patientProfile.weight}kg</span></div>
+                                        <div className="w-px h-6 bg-white/20"></div>
+                                        <div>
+                                            <span className="text-gray-400 block text-[9px] uppercase font-bold tracking-wider">Allergie / Patologie</span>
+                                            <div className="flex gap-2 mt-0.5">
+                                                {patientProfile.allergies.map(a => <span key={a} className="bg-red-500/20 text-red-300 px-2 py-0.5 rounded text-[9px] font-bold border border-red-500/30">{a}</span>)}
+                                                {patientProfile.pathologies.map(p => <span key={p} className="bg-amber-500/20 text-amber-300 px-2 py-0.5 rounded text-[9px] font-bold border border-amber-500/30">{p}</span>)}
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div className="flex gap-2">
+                                    <button onClick={() => setIsDrvEditorOpen(true)} className="px-4 py-2 bg-white/10 hover:bg-white/20 rounded-xl text-xs font-bold transition-colors flex items-center gap-2">
+                                        <i className="ph-bold ph-database"></i> Database EFSA
+                                    </button>
+                                    <button onClick={() => setIsAnalysisOpen(false)} className="w-10 h-10 bg-white/10 hover:bg-red-500/20 hover:text-red-400 rounded-xl flex items-center justify-center transition-colors">
+                                        <i className="ph-bold ph-x"></i>
+                                    </button>
+                                </div>
+                            </div>
+
+                            {/* 2. BARRA STRUMENTI & TIMEFRAME */}
+                            <div className="px-8 py-4 bg-white border-b border-gray-100 flex justify-between items-center shrink-0 z-10 shadow-sm">
+                                <h3 className="text-xl font-black text-gray-900">Analisi Micronutrizionale</h3>
+                                <div className="flex bg-gray-100 p-1 rounded-xl">
+                                    {['meal', 'day', 'week'].map(tf => (
+                                        <button 
+                                            key={tf} onClick={() => setAnalysisTimeframe(tf)}
+                                            className={`px-6 py-2 rounded-lg text-xs font-bold transition-all ${analysisTimeframe === tf ? 'bg-white text-black shadow-sm scale-100' : 'text-gray-500 hover:bg-gray-200'}`}
+                                        >
+                                            {tf === 'meal' ? 'Singolo Pasto' : tf === 'day' ? 'Media Giornaliera' : 'Totale Settimanale'}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+
+                            {/* 3. GRIGLIA CARD DINAMICHE */}
+                            <div className="flex-1 overflow-y-auto p-8 bg-gray-50/50">
+                                {/* SEZIONE A: COMPONENTI CON TARGET (EFSA) */}
+                                <div className="mb-8">
+                                    <h4 className="text-sm font-black text-gray-400 uppercase tracking-widest mb-4 flex items-center gap-2">
+                                        <i className="ph-fill ph-target text-blue-500"></i> Componenti con Reference (EFSA/LARN)
+                                    </h4>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                                        {Object.entries(patientTargets).map(([key, ref]) => {
+                                            const rawVal = currentProfile[key] || 0;
+                                            const val = analysisTimeframe === 'week' ? rawVal * 7 : analysisTimeframe === 'meal' ? rawVal / 5 : rawVal; // Esempio pasto diviso 5
+                                            const target = ref.target * multiplier;
+                                            const ul = ref.ul ? ref.ul * multiplier : null;
+                                            const pct = Math.min((val / target) * 100, 100);
+
+                                            let status = 'ok';
+                                            if (val < target * 0.75) status = 'low';
+                                            if (ul && val > ul) status = 'high';
+
+                                            return (
+                                                <div key={key} className={`bg-white p-5 rounded-2xl border ${status === 'low' ? 'border-amber-200 shadow-amber-100' : status === 'high' ? 'border-red-200 shadow-red-100' : 'border-gray-200'} shadow-sm relative overflow-hidden group`}>
+                                                    {status !== 'ok' && (
+                                                        <div className={`absolute top-0 right-0 w-12 h-12 flex items-start justify-end p-2 ${status === 'low' ? 'bg-amber-50 text-amber-500' : 'bg-red-50 text-red-500'} rounded-bl-3xl`}>
+                                                            <i className={`ph-fill ${status === 'low' ? 'ph-arrow-down' : 'ph-warning-octagon'} text-lg`}></i>
+                                                        </div>
+                                                    )}
+                                                    <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">{ref.name}</span>
+                                                    <div className="flex items-baseline gap-1 mb-3">
+                                                        <span className={`text-2xl font-black ${status === 'low' ? 'text-amber-600' : status === 'high' ? 'text-red-600' : 'text-gray-900'}`}>
+                                                            {val.toFixed(1)}
+                                                        </span>
+                                                        <span className="text-xs font-bold text-gray-400">{ref.unit}</span>
+                                                    </div>
+                                                    
+                                                    {/* ProgressBar */}
+                                                    <div className="h-1.5 w-full bg-gray-100 rounded-full overflow-hidden mb-2 relative">
+                                                        <div className={`h-full transition-all ${status === 'low' ? 'bg-amber-400' : status === 'high' ? 'bg-red-500' : 'bg-green-500'}`} style={{ width: `${pct}%` }} />
+                                                    </div>
+                                                    
+                                                    <div className="flex justify-between items-center text-[9px] font-bold text-gray-400">
+                                                        <span>Target: {target.toFixed(1)}</span>
+                                                        {ul && <span className="text-red-400">Max: {ul.toFixed(1)}</span>}
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+
+                                {/* SEZIONE B: TUTTI GLI ALTRI COMPONENTI DEL DATABASE ALIMENTI */}
+                                <div>
+                                    <h4 className="text-sm font-black text-gray-400 uppercase tracking-widest mb-4 flex items-center gap-2">
+                                        <i className="ph-fill ph-dots-three-circle text-gray-500"></i> Altri Componenti Analizzati
+                                    </h4>
+                                    <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
+                                        {Object.entries(currentProfile).filter(([k, v]) => v > 0 && !patientTargets[k]).map(([key, val]) => (
+                                            <div key={key} className="bg-white p-3 rounded-xl border border-gray-100 shadow-sm flex flex-col">
+                                                <span className="text-[9px] font-bold text-gray-400 uppercase tracking-wider truncate" title={key}>{key.replace(/_/g, ' ')}</span>
+                                                <span className="text-sm font-black text-gray-800 mt-1">
+                                                    {(analysisTimeframe === 'week' ? val * 7 : val).toFixed(2)}
+                                                </span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                );
+            })()}
+
+            {/* --- GESTIONALE DATABASE EFSA (DRVs) --- */}
+            {isDrvEditorOpen && (
+                <div className="fixed inset-0 z-[14000] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-5xl h-[80vh] flex flex-col overflow-hidden">
+                        <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50">
+                            <div>
+                                <h3 className="text-lg font-black text-gray-900">Database EFSA (DRVs)</h3>
+                                <span className="text-xs text-gray-500 font-bold">{drvDB.length} record presenti</span>
+                            </div>
+                            <div className="flex gap-2">
+                                <button onClick={() => drvFileInputRef.current.click()} className="px-4 py-2 bg-white border border-gray-200 rounded-xl text-xs font-bold hover:bg-gray-100">Importa JSON</button>
+                                <input type="file" ref={drvFileInputRef} accept=".json" style={{ display: 'none' }} onChange={e => {
+                                    const file = e.target.files[0];
+                                    if (file) {
+                                        const reader = new FileReader();
+                                        reader.onload = (evt) => { setDrvDB(JSON.parse(evt.target.result)); alert("DB Caricato!"); };
+                                        reader.readAsText(file);
+                                    }
+                                }} />
+                                <button onClick={() => setIsDrvEditorOpen(false)} className="w-10 h-10 rounded-full bg-gray-200 flex items-center justify-center"><i className="ph-bold ph-x"></i></button>
+                            </div>
+                        </div>
+                        <div className="flex-1 overflow-auto p-0">
+                            <table className="w-full text-left text-xs">
+                                <thead className="bg-gray-100 sticky top-0 font-black text-gray-500 uppercase tracking-wider">
+                                    <tr>
+                                        <th className="p-3">Nutrient</th>
+                                        <th className="p-3">Population</th>
+                                        <th className="p-3">Age / Gender</th>
+                                        <th className="p-3">PRI</th>
+                                        <th className="p-3">AI</th>
+                                        <th className="p-3">UL</th>
+                                        <th className="p-3">Azioni</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-gray-100">
+                                    {drvDB.map((row, idx) => (
+                                        <tr key={idx} className="hover:bg-gray-50">
+                                            <td className="p-3 font-bold text-gray-900">{row.Nutrient}</td>
+                                            <td className="p-3">{row["Target population"]}</td>
+                                            <td className="p-3">{row.Age} / {row.Gender}</td>
+                                            <td className="p-3">{row.PRI}</td>
+                                            <td className="p-3">{row.AI}</td>
+                                            <td className="p-3 text-red-500">{row.UL}</td>
+                                            <td className="p-3">
+                                                <button onClick={() => {
+                                                    const newDB = [...drvDB];
+                                                    newDB.splice(idx, 1);
+                                                    setDrvDB(newDB);
+                                                }} className="text-red-500 hover:text-red-700 font-bold"><i className="ph-bold ph-trash"></i></button>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            
         </div>
     );
 };
