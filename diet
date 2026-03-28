@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 
 
+
 // --- DATABASE ALIMENTI DI DEFAULT ---
 // Sostituisce il defaultDB degli esercizi.
 const defaultFoodDB = [
@@ -11,7 +12,182 @@ const defaultFoodDB = [
     { category: "Latticini", name: "Yogurt Greco 0%", kcal: 57, p: 10, c: 4, f: 0 }
 ];
 
+
+
+
+
+// --- MOTORE CLINICO: FORMULE METABOLICHE E ANTROPOMETRIA ---
+// --- MOTORE CLINICO: FORMULE METABOLICHE (CORRETTO) ---
+const calculateRMR = (data) => {
+    // Ora estraiamo anche weightTarget dallo stato
+    const { sex, age, weight, height, fatPct, formula, weightTarget } = data;
+    
+    const actualW = parseFloat(weight) || 0;
+    const h = parseFloat(height) || 0;
+    const a = parseFloat(age) || 0;
+    const f = parseFloat(fatPct) || 0;
+
+    if (actualW <= 0 || h <= 0) return 0;
+
+    // 1. Calcolo in background dei pesi clinici
+    const idealW = sex === 'M' ? (h - 100) - ((h - 150) / 4) : (h - 100) - ((h - 150) / 2);
+    const adjustedW = idealW + 0.25 * (actualW - idealW);
+
+    // 2. SELEZIONE SMART DEL PESO (Il cuore della tua richiesta)
+    let w = actualW; 
+    if (weightTarget === 'ideal') w = idealW;
+    if (weightTarget === 'adjusted') w = adjustedW;
+
+    // 3. Le formule ora usano la 'w' corretta (Attuale, Ideale o Aggiustata)
+    switch (formula) {
+        case 'mifflin':
+            return (10 * w) + (6.25 * h) - (5 * a) + (sex === 'M' ? 5 : -161);
+        case 'harris':
+            return sex === 'M' 
+                ? 88.362 + (13.397 * w) + (4.799 * h) - (5.677 * a)
+                : 447.593 + (9.247 * w) + (3.098 * h) - (4.330 * a);
+        case 'katch':
+            return 370 + (21.6 * (w * (1 - (f / 100))));
+        case 'fao_0_12_formula': return w * 95;
+        case 'fao_0_12_breast': return w * 85;
+        case 'schofield_0_3': return sex === 'M' ? (60.9 * w) - 54 : (61.0 * w) - 51;
+        case 'schofield_3_9': return sex === 'M' ? (22.7 * w) + 495 : (22.5 * w) + 499;
+        case 'schofield_10_17': return sex === 'M' ? (17.5 * w) + 651 : (12.2 * w) + 746;
+        case 'schofield_18_29': return sex === 'M' ? (15.3 * w) + 679 : (14.7 * w) + 496;
+        case 'schofield_30_59': return sex === 'M' ? (11.6 * w) + 879 : (8.7 * w) + 829;
+        case 'schofield_60': return sex === 'M' ? (13.5 * w) + 487 : (10.5 * w) + 596;
+        case 'schofield_wh_18_29': return sex === 'M' ? (15.057 * w) + (1.004 * h) + 705.8 : (13.623 * w) + (2.83 * h) + 98.2;
+        case 'schofield_wh_30_59': return sex === 'M' ? (11.472 * w) + (1.673 * h) + 584.4 : (8.126 * w) + (0.846 * h) + 845.6;
+        default: return 0;
+    }
+};
+
+
+
+
+
+const getAdjustedWeight = (actual, ideal) => ideal + 0.25 * (actual - ideal);
+
+const getBMICategory = (bmi) => {
+    if (bmi < 18.5) return { label: 'Sottopeso', color: '#FF9500' };
+    if (bmi < 25) return { label: 'Normopeso', color: '#00C853' };
+    if (bmi < 30) return { label: 'Sovrappeso', color: '#FF9500' };
+    if (bmi < 35) return { label: 'Obesità I', color: '#FF3B30' };
+    return { label: 'Obesità II-III', color: '#FF3B30' };
+};
+
+const getWHRCategory = (whr, sex) => {
+    const highRisk = sex === 'M' ? 0.90 : 0.85;
+    const modRisk = sex === 'M' ? 0.85 : 0.80;
+    if (whr >= highRisk) return { label: 'Rischio Alto', color: '#FF3B30' };
+    if (whr >= modRisk) return { label: 'Rischio Medio', color: '#FF9500' };
+    return { label: 'Rischio Basso', color: '#00C853' };
+};
+
+const getMorfotipo = (grant, sex) => {
+    if (sex === 'M') {
+        if (grant > 10.4) return 'Longilineo';
+        if (grant > 9.6) return 'Normolineo';
+        return 'Brevilineo';
+    } else {
+        if (grant > 10.9) return 'Longilineo';
+        if (grant > 9.9) return 'Normolineo';
+        return 'Brevilineo';
+    }
+};
+
+
+const calculateIdealWeight = (sex, h) => {
+    if (!h) return 0;
+    return sex === 'M' ? (h - 100) - ((h - 150) / 4) : (h - 100) - ((h - 150) / 2);
+};
+
 export const DietPlan = ({ patient }) => {
+
+    // --- GESTIONE DINAMICA PASTI (MATRICE) ---
+    const addMatrixMeal = () => {
+        setCalcData(prev => ({
+            ...prev,
+            distribution: [...prev.distribution, { id: Date.now(), name: 'Nuovo Pasto', value: 0 }]
+        }));
+    };
+
+    const removeMatrixMeal = (id) => {
+        setCalcData(prev => ({
+            ...prev,
+            distribution: prev.distribution.filter(m => m.id !== id)
+        }));
+    };
+
+    const updateMatrixMeal = (id, field, val) => {
+        setCalcData(prev => ({
+            ...prev,
+            distribution: prev.distribution.map(m => m.id === id ? { ...m, [field]: val } : m)
+        }));
+    };
+    const [setupTab, setSetupTab] = useState('antropometria');
+
+    // --- STATI PER IL CALCOLATORE LAF A 24 ORE ---
+    const [isLafModalOpen, setIsLafModalOpen] = useState(false);
+    const [lafActivities, setLafActivities] = useState([
+        { id: 1, name: 'Sonno / Riposo a letto', hours: 8, pal: 0.95 },
+        { id: 2, name: 'Lavoro Sedentario (Ufficio, PC)', hours: 8, pal: 1.3 },
+        { id: 3, name: 'Tempo Libero (Divano, Lettura)', hours: 5, pal: 1.2 },
+        { id: 4, name: 'Attività Leggera (Cucinare, Pulire)', hours: 2, pal: 1.8 },
+        { id: 5, name: 'Allenamento / Sport Moderato', hours: 1, pal: 4.0 }
+    ]);
+
+    // --- MOTORE CALCOLO LAF (METODO FATTORIALE 24H) ---
+    const totalLafHours = lafActivities.reduce((acc, curr) => acc + (Number(curr.hours) || 0), 0);
+    const calculatedLAF = totalLafHours === 24 
+        ? (lafActivities.reduce((acc, curr) => acc + (curr.hours * curr.pal), 0) / 24).toFixed(2) 
+        : 0;
+
+    const applyLafTemplate = (type) => {
+        const templates = {
+            'sedentario': [
+                { id: 1, name: 'Sonno', hours: 8, pal: 0.95 },
+                { id: 2, name: 'Lavoro Sedentario', hours: 10, pal: 1.3 },
+                { id: 3, name: 'Relax (TV, Auto)', hours: 4, pal: 1.2 },
+                { id: 4, name: 'Attività Domestica', hours: 2, pal: 1.8 }
+            ], // ~ LAF 1.25
+            'leggero': [
+                { id: 1, name: 'Sonno', hours: 8, pal: 0.95 },
+                { id: 2, name: 'Lavoro Misto (In piedi/Seduto)', hours: 8, pal: 1.5 },
+                { id: 3, name: 'Spostamenti / Faccende', hours: 4, pal: 1.8 },
+                { id: 4, name: 'Allenamento Leggero', hours: 1, pal: 3.5 },
+                { id: 5, name: 'Relax', hours: 3, pal: 1.2 }
+            ], // ~ LAF 1.45
+            'attivo': [
+                { id: 1, name: 'Sonno', hours: 8, pal: 0.95 },
+                { id: 2, name: 'Lavoro in Piedi (Commesso, ecc)', hours: 8, pal: 1.8 },
+                { id: 3, name: 'Spostamenti a Piedi', hours: 2, pal: 2.5 },
+                { id: 4, name: 'Allenamento Intenso', hours: 1.5, pal: 6.0 },
+                { id: 5, name: 'Relax / Casa', hours: 4.5, pal: 1.4 }
+            ] // ~ LAF 1.75
+        };
+        if(templates[type]) setLafActivities(templates[type]);
+    };
+
+    // --- STATI PER IL CALCOLATORE CLINICO AVANZATO ---
+    const [calcData, setCalcData] = useState({
+        sex: 'M', age: 30, weight: 70, height: 175, 
+        waist: 80, hip: 95, wrist: 16, fatPct: 15,
+        weightTarget: 'actual', 
+        formula: 'mifflin', laf: 1.45,
+        macroTargets: { c: 50, p: 20, f: 30 },
+        // TRASFORMATO IN ARRAY DINAMICO:
+        distribution: [
+            { id: 1, name: 'Colazione', value: 20 },
+            { id: 2, name: 'Spuntino Mattina', value: 5 },
+            { id: 3, name: 'Pranzo', value: 35 },
+            { id: 4, name: 'Spuntino Pomeriggio', value: 10 },
+            { id: 5, name: 'Cena', value: 30 }
+        ]
+    });
+
+    const [analysisTargetId, setAnalysisTargetId] = useState('all'); // 'all' o l'ID del giorno
+
     // --- STATI PRINCIPALI ---
     
     // Rappresenta l'intera struttura della dieta: Array di Giorni -> Array di Pasti -> Array di Alimenti
@@ -25,6 +201,8 @@ export const DietPlan = ({ patient }) => {
     
     // Sostituisce activeDayInfo. Identifica quale pasto e quale giorno sono attualmente aperti nel modale centrale.
     const [activeMealInfo, setActiveMealInfo] = useState(null); // { dayId, mealId }
+
+    const [isSetupOpen, setIsSetupOpen] = useState(false);
 
     // Gestione del database alimenti personalizzato, salvato in locale.
     const [foodDB, setFoodDB] = useState(() => {
@@ -166,9 +344,142 @@ export const DietPlan = ({ patient }) => {
         meals: d.meals.map(m => m.id === mealId ? { ...m, title } : m) 
     } : d));
 
-    // --- GESTIONE ALIMENTI (Equivalente alla gestione Esercizi nel TrainingPlan) ---
+    // --- GESTIONE ALIMENTI ---
+    const addFoodItem = (dayId, mealId) => {
+        setDietDays(prev => prev.map(d => d.id === dayId ? {
+            ...d, meals: d.meals.map(m => m.id === mealId ? {
+                ...m, items: [...m.items, { id: genId(), name: '', weight: 100, kcal: 0, p: 0, c: 0, f: 0 }]
+            } : m)
+        } : d));
+    };
 
-    // Aggiunge un nuovo Alimento a un Pasto. Imposta un peso di default di 100g e valori nutrizionali a 0.
+    const removeFoodItem = (dayId, mealId, itemId) => setDietDays(prev => prev.map(d => d.id === dayId ? { 
+        ...d, meals: d.meals.map(m => m.id === mealId ? { ...m, items: m.items.filter(item => item.id !== itemId) } : m) 
+    } : d));
+
+    const updateFoodValue = (dayId, mealId, itemId, field, value) => {
+        setDietDays(prev => prev.map(d => d.id === dayId ? {
+            ...d, meals: d.meals.map(m => m.id === mealId ? {
+                ...m, items: m.items.map(item => {
+                    if (item.id === itemId) {
+                        const updatedItem = { ...item, [field]: value };
+                        if (field === 'name') {
+                            const val = value.toLowerCase();
+                            if (val.length >= 2) {
+                                const matches = foodDB.filter(db => db.name.toLowerCase().includes(val)).slice(0, 6);
+                                setSuggestions(prevS => ({ ...prevS, [itemId]: matches }));
+                            } else {
+                                setSuggestions(prevS => { const n = {...prevS}; delete n[itemId]; return n; });
+                            }
+                        }
+                        return updatedItem;
+                    }
+                    return item;
+                })
+            } : m)
+        } : d));
+    };
+
+    const applyFoodSuggestion = (dayId, mealId, itemId, dbItem) => {
+        setDietDays(prev => prev.map(d => d.id === dayId ? {
+            ...d, meals: d.meals.map(m => m.id === mealId ? {
+                ...m, items: m.items.map(item => item.id === itemId ? { 
+                    ...item, name: dbItem.name, kcal: dbItem.kcal, p: dbItem.p, c: dbItem.c, f: dbItem.f 
+                } : item)
+            } : m)
+        } : d));
+        setSuggestions(prev => { const n = {...prev}; delete n[itemId]; return n; });
+    };
+
+    const calculateTotals = (items) => {
+        return items.reduce((acc, curr) => {
+            const weight = parseFloat(curr.weight) || 0;
+            const ratio = weight / 100;
+            return {
+                kcal: acc.kcal + ((parseFloat(curr.kcal) || 0) * ratio),
+                p: acc.p + ((parseFloat(curr.p) || 0) * ratio),
+                c: acc.c + ((parseFloat(curr.c) || 0) * ratio),
+                f: acc.f + ((parseFloat(curr.f) || 0) * ratio),
+            };
+        }, { kcal: 0, p: 0, c: 0, f: 0 });
+    };
+
+    const [draggedItem, setDraggedItem] = useState(null);
+    const [dragOverId, setDragOverId] = useState(null);
+
+    const handleDragStart = (e, type, itemData) => {
+        e.stopPropagation();
+        setDraggedItem({ type, ...itemData });
+        setTimeout(() => { e.target.style.opacity = '0.4'; }, 0); 
+    };
+
+    const handleDragEnd = (e) => {
+        e.preventDefault();
+        e.target.style.opacity = '1';
+        setDraggedItem(null);
+        setDragOverId(null);
+    };
+
+    const handleDragOver = (e, targetType, targetId) => {
+        e.preventDefault(); 
+        if (draggedItem?.type === 'day' && targetType === 'meal') return; 
+        e.stopPropagation(); 
+        if (dragOverId !== targetId) setDragOverId(targetId);
+    };
+
+    const handleDragLeave = (e) => {
+        e.preventDefault();
+        setDragOverId(null);
+    };
+
+    const handleDrop = (e, targetType, targetData) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setDragOverId(null);
+
+        if (!draggedItem) return;
+
+        setDietDays(prev => {
+            const newDietDays = JSON.parse(JSON.stringify(prev)); 
+
+            if (draggedItem.type === 'day') {
+                const dropDayId = targetType === 'meal' ? targetData.dayId : targetData.dayId;
+                const dragIdx = newDietDays.findIndex(d => d.id === draggedItem.dayId);
+                const dropIdx = newDietDays.findIndex(d => d.id === dropDayId);
+                if (dragIdx === -1 || dropIdx === -1 || dragIdx === dropIdx) return prev;
+                const [movedDay] = newDietDays.splice(dragIdx, 1);
+                newDietDays.splice(dropIdx, 0, movedDay);
+            }
+            else if (draggedItem.type === 'meal') {
+                const sourceDayIdx = newDietDays.findIndex(d => d.id === draggedItem.dayId);
+                if (sourceDayIdx === -1) return prev;
+                const sourceDay = newDietDays[sourceDayIdx];
+                const dragIdx = sourceDay.meals.findIndex(m => m.id === draggedItem.mealId);
+                if (dragIdx === -1) return prev;
+
+                if (targetType === 'meal') {
+                    const targetDayIdx = newDietDays.findIndex(d => d.id === targetData.dayId);
+                    if (targetDayIdx === -1) return prev;
+                    const targetDay = newDietDays[targetDayIdx];
+                    const dropIdx = targetDay.meals.findIndex(m => m.id === targetData.mealId);
+                    if (draggedItem.dayId === targetData.dayId && dragIdx === dropIdx) return prev;
+                    const [movedMeal] = sourceDay.meals.splice(dragIdx, 1);
+                    targetDay.meals.splice(dropIdx, 0, movedMeal);
+                } 
+                else if (targetType === 'day') {
+                    if (draggedItem.dayId === targetData.dayId) return prev;
+                    const targetDayIdx = newDietDays.findIndex(d => d.id === targetData.dayId);
+                    if (targetDayIdx === -1) return prev;
+                    const [movedMeal] = sourceDay.meals.splice(dragIdx, 1);
+                    newDietDays[targetDayIdx].meals.push(movedMeal);
+                }
+            }
+            return newDietDays;
+        });
+        setDraggedItem(null);
+    };
+
+    // --- GESTIONE DATABASE ALIMENTI ---
 
     // --- GESTIONE DATABASE ALIMENTI ---
 
@@ -275,12 +586,279 @@ export const DietPlan = ({ patient }) => {
         );
     };
 
+    // --- STATI PER DASHBOARD E MODALE SMART ---
+    const [isSmartOpen, setIsSmartOpen] = useState(false);
+    const [smartConfig, setSmartConfig] = useState({ 
+        type: 'bar',        // 'bar', 'pie', 'line', 'mixed', '3d', 'radar'
+        metric: 'kcal',     // 'kcal', 'macro', 'p', 'c', 'f', 'weight'
+        scope: 'activeDay', // 'activeDay', 'allDays'
+        comment: '' 
+    });
+    
+
+    // --- MOTORE PLOTLY.JS (Senza Menu fluttuante e con etichette chiare) ---
+    const plotRef = useRef(null);
+
+    useEffect(() => {
+        if (!isSmartOpen || !window.Plotly || !plotRef.current) return;
+
+        // 1. GESTIONE DELLO SCOPE E AGGREGAZIONE DATI
+        let labels = [];
+        let dataMap = { kcal: [], p: [], c: [], f: [], weight: [] };
+
+        if (smartConfig.scope === 'activeDay') {
+            if (!activeDay) return;
+            const meals = activeDay.meals || [];
+            labels = meals.map((m, i) => m.title || `Pasto ${i + 1}`);
+            
+            dataMap.kcal = meals.map(m => calculateTotals(m.items).kcal);
+            dataMap.p = meals.map(m => calculateTotals(m.items).p);
+            dataMap.c = meals.map(m => calculateTotals(m.items).c);
+            dataMap.f = meals.map(m => calculateTotals(m.items).f);
+            dataMap.weight = meals.map(m => m.items.reduce((acc, it) => acc + (Number(it.weight) || 0), 0));
+        } else {
+            labels = dietDays.map((d, i) => d.title || `Giorno ${i + 1}`);
+            
+            dietDays.forEach(day => {
+                const dayItems = day.meals.flatMap(m => m.items);
+                const dayTotals = calculateTotals(dayItems);
+                dataMap.kcal.push(dayTotals.kcal);
+                dataMap.p.push(dayTotals.p);
+                dataMap.c.push(dayTotals.c);
+                dataMap.f.push(dayTotals.f);
+                dataMap.weight.push(dayItems.reduce((acc, it) => acc + (Number(it.weight) || 0), 0));
+            });
+        }
+
+        // 2. PALETTE COLORI FISSA (Stile Apple Pro)
+        const cColor = '#1D1D1F'; // Nero per Carboidrati o Kcal
+        const pColor = '#00C853'; // Verde per Proteine o Valori primari
+        const fColor = '#86868B'; // Grigio per Grassi
+        const accColor = '#007AFF'; // Blu per metriche di confronto (es. Peso nel grafico misto)
+        
+        const colorMap = { kcal: cColor, p: pColor, c: cColor, f: fColor, weight: accColor };
+        const nameMap = { kcal: 'Kcal', p: 'Proteine (g)', c: 'Carbo (g)', f: 'Grassi (g)', weight: 'Volume Cibo (g)' };
+
+        // 3. COSTRUZIONE DEL LAYOUT BASE
+        let plotData = [];
+        let layout = { 
+            autosize: true, 
+            margin: { t: 40, l: 60, r: 60, b: 60 }, // Margini allargati per mostrare bene le etichette degli assi
+            paper_bgcolor: 'transparent',
+            plot_bgcolor: 'transparent',
+            font: { family: '-apple-system, BlinkMacSystemFont, sans-serif', color: '#86868B' },
+            showlegend: true,
+            legend: { orientation: 'h', y: -0.2 },
+            xaxis: { tickangle: -45 }
+        };
+
+        // 4. RENDERING CONDIZIONALE DEI TIPI DI GRAFICO
+        if (smartConfig.type === 'bar' || smartConfig.type === 'line') {
+            const type = smartConfig.type === 'bar' ? 'bar' : 'scatter';
+            const mode = smartConfig.type === 'line' ? 'lines+markers' : undefined;
+
+            if (smartConfig.metric === 'macro') {
+                plotData.push({ x: labels, y: dataMap.c, type, mode, name: nameMap.c, marker: { color: cColor }, line: { color: cColor, width: 2 } });
+                plotData.push({ x: labels, y: dataMap.p, type, mode, name: nameMap.p, marker: { color: pColor }, line: { color: pColor, width: 2 } });
+                plotData.push({ x: labels, y: dataMap.f, type, mode, name: nameMap.f, marker: { color: fColor }, line: { color: fColor, width: 2 } });
+                if (smartConfig.type === 'bar') layout.barmode = 'stack';
+                layout.yaxis = { title: { text: 'Grammi (g)' } };
+            } else {
+                const m = smartConfig.metric;
+                plotData.push({ x: labels, y: dataMap[m], type, mode, name: nameMap[m], marker: { color: colorMap[m] }, line: { color: colorMap[m], width: 3 }, fill: smartConfig.type === 'line' ? 'tozeroy' : 'none' });
+                layout.yaxis = { title: { text: nameMap[m] } };
+            }
+        } 
+        
+        else if (smartConfig.type === 'pie') {
+            if (smartConfig.metric === 'macro') {
+                const sumPro = dataMap.p.reduce((a,b) => a+b, 0);
+                const sumCar = dataMap.c.reduce((a,b) => a+b, 0);
+                const sumFat = dataMap.f.reduce((a,b) => a+b, 0);
+                plotData.push({ labels: [nameMap.c, nameMap.p, nameMap.f], values: [sumCar, sumPro, sumFat], type: 'pie', hole: 0.4, marker: { colors: [cColor, pColor, fColor] }, textinfo: 'label+percent' });
+            } else {
+                const m = smartConfig.metric;
+                plotData.push({ labels: labels, values: dataMap[m], type: 'pie', hole: 0.4, textinfo: 'label+percent', name: nameMap[m] });
+            }
+        }
+
+        // GRAFICO MISTO: Kcal (Y primario) vs Volume (Y secondario)
+        else if (smartConfig.type === 'mixed') {
+            plotData.push({ x: labels, y: dataMap.kcal, type: 'bar', name: 'Kcal Totali', marker: { color: cColor }, yaxis: 'y1' });
+            plotData.push({ x: labels, y: dataMap.weight, type: 'scatter', mode: 'lines+markers', name: 'Volume Cibo (g)', line: { color: accColor, width: 3 }, marker: { size: 8 }, yaxis: 'y2' });
+            
+            layout.yaxis = { title: { text: 'Calorie (Kcal)', font: { color: cColor } }, tickfont: { color: cColor } };
+            layout.yaxis2 = { title: { text: 'Volume (g)', font: { color: accColor } }, tickfont: { color: accColor }, overlaying: 'y', side: 'right' };
+        }
+
+        // GRAFICO RADAR
+        else if (smartConfig.type === 'radar') {
+            labels.forEach((label, i) => {
+                plotData.push({
+                    type: 'scatterpolar',
+                    r: [dataMap.c[i], dataMap.p[i], dataMap.f[i], dataMap.c[i]], 
+                    theta: ['Carbo (g)', 'Proteine (g)', 'Grassi (g)', 'Carbo (g)'],
+                    fill: 'toself',
+                    name: label
+                });
+            });
+            layout.polar = { radialaxis: { visible: true, range: [0, Math.max(...dataMap.c, ...dataMap.p, ...dataMap.f) * 1.2] } };
+        }
+
+        // GRAFICO 3D (Ora con le etichette chiare per X, Y e Z)
+        else if (smartConfig.type === '3d') {
+            plotData.push({
+                x: dataMap.c, y: dataMap.p, z: dataMap.f,
+                mode: 'markers+text', type: 'scatter3d',
+                text: labels, textposition: 'top center',
+                marker: { size: 8, color: dataMap.kcal, colorscale: 'Viridis', opacity: 0.8, showscale: true, colorbar: { title: 'Kcal' } }
+            });
+            
+            layout.scene = {
+                xaxis: { title: { text: 'Carboidrati (g)' } }, 
+                yaxis: { title: { text: 'Proteine (g)' } }, 
+                zaxis: { title: { text: 'Grassi (g)' } }
+            };
+            layout.margin = { l: 0, r: 0, b: 0, t: 0 };
+        }
+
+        window.Plotly.purge(plotRef.current);
+        
+        // Configurazione finale: displayModeBar: false nasconde definitivamente la toolbar fluttuante
+        window.Plotly.newPlot(plotRef.current, plotData, layout, { displayModeBar: false, responsive: true });
+
+    }, [isSmartOpen, activeDay, smartConfig, dietDays]);
+
+    // --- STATI PER I REPORT SALVATI ---
+    const [savedReports, setSavedReports] = useState(() => {
+        const stored = localStorage.getItem('diet_saved_reports');
+        return stored ? JSON.parse(stored) : [];
+    });
+
+    useEffect(() => {
+        localStorage.setItem('diet_saved_reports', JSON.stringify(savedReports));
+    }, [savedReports]);
+
+    // --- GESTIONE SALVATAGGIO REPORT ---
+    const saveSmartReport = () => {
+        const newReport = {
+            id: genId(),
+            date: new Date().toLocaleDateString('it-IT'),
+            dayId: activeDay ? activeDay.id : null,
+            dayTitle: smartConfig.scope === 'activeDay' ? (activeDay?.title || 'Giorno') : 'Panoramica Settimanale',
+            config: { ...smartConfig }
+        };
+        setSavedReports(prev => [newReport, ...prev]); // Aggiunge in cima alla lista
+        setIsSmartOpen(false);
+        // Resetta il commento per non portarselo dietro al prossimo utilizzo
+        setSmartConfig(prev => ({ ...prev, comment: '' })); 
+    };
+
+    const deleteReport = (reportId) => {
+        if(window.confirm("Vuoi eliminare definitivamente questo report?")) {
+            setSavedReports(prev => prev.filter(r => r.id !== reportId));
+        }
+    };
+
+    // --- SOTTO-COMPONENTE: GENERATORE MINI GRAFICI ---
+    const MiniReportChart = ({ report, allDays }) => {
+        const miniPlotRef = useRef(null);
+
+        useEffect(() => {
+            if (!window.Plotly || !miniPlotRef.current) return;
+
+            const config = report.config;
+            let labels = [];
+            let dataMap = { kcal: [], p: [], c: [], f: [], weight: [] };
+
+            // Ricostruzione dati in base allo scope salvato
+            if (config.scope === 'activeDay') {
+                const targetDay = allDays.find(d => d.id === report.dayId) || allDays[0];
+                if (!targetDay) return;
+                labels = (targetDay.meals || []).map((m, i) => m.title || `Pasto ${i + 1}`);
+                dataMap.kcal = targetDay.meals.map(m => calculateTotals(m.items).kcal);
+                dataMap.p = targetDay.meals.map(m => calculateTotals(m.items).p);
+                dataMap.c = targetDay.meals.map(m => calculateTotals(m.items).c);
+                dataMap.f = targetDay.meals.map(m => calculateTotals(m.items).f);
+                dataMap.weight = targetDay.meals.map(m => m.items.reduce((acc, it) => acc + (Number(it.weight) || 0), 0));
+            } else {
+                labels = allDays.map((d, i) => d.title || `Giorno ${i + 1}`);
+                allDays.forEach(day => {
+                    const dayItems = day.meals.flatMap(m => m.items);
+                    const dayTotals = calculateTotals(dayItems);
+                    dataMap.kcal.push(dayTotals.kcal);
+                    dataMap.p.push(dayTotals.p);
+                    dataMap.c.push(dayTotals.c);
+                    dataMap.f.push(dayTotals.f);
+                    dataMap.weight.push(dayItems.reduce((acc, it) => acc + (Number(it.weight) || 0), 0));
+                });
+            }
+
+            const cColor = '#1D1D1F'; const pColor = '#00C853'; const fColor = '#86868B'; const accColor = '#007AFF';
+            let plotData = [];
+            let layout = { 
+                autosize: true, margin: { t: 10, l: 30, r: 30, b: 30 },
+                paper_bgcolor: 'transparent', plot_bgcolor: 'transparent',
+                font: { family: '-apple-system, BlinkMacSystemFont, sans-serif', color: '#86868B', size: 10 },
+                showlegend: false // Legenda nascosta per le card compatte
+            };
+
+            // Mappatura compatta dei grafici
+            if (config.type === 'bar' || config.type === 'line') {
+                const type = config.type === 'bar' ? 'bar' : 'scatter';
+                const mode = config.type === 'line' ? 'lines+markers' : undefined;
+                if (config.metric === 'macro') {
+                    plotData.push({ x: labels, y: dataMap.c, type, mode, marker: { color: cColor }, line: { color: cColor } });
+                    plotData.push({ x: labels, y: dataMap.p, type, mode, marker: { color: pColor }, line: { color: pColor } });
+                    plotData.push({ x: labels, y: dataMap.f, type, mode, marker: { color: fColor }, line: { color: fColor } });
+                    if (config.type === 'bar') layout.barmode = 'stack';
+                } else {
+                    const col = config.metric === 'weight' ? accColor : (config.metric === 'p' ? pColor : cColor);
+                    plotData.push({ x: labels, y: dataMap[config.metric], type, mode, marker: { color: col }, line: { color: col }, fill: config.type === 'line' ? 'tozeroy' : 'none' });
+                }
+            } else if (config.type === 'pie') {
+                if (config.metric === 'macro') {
+                    plotData.push({ labels: ['C', 'P', 'F'], values: [dataMap.c.reduce((a,b)=>a+b,0), dataMap.p.reduce((a,b)=>a+b,0), dataMap.f.reduce((a,b)=>a+b,0)], type: 'pie', hole: 0.5, marker: { colors: [cColor, pColor, fColor] }, textinfo: 'percent' });
+                } else {
+                    plotData.push({ labels: labels, values: dataMap[config.metric], type: 'pie', hole: 0.5, textinfo: 'percent' });
+                }
+            } else if (config.type === 'mixed') {
+                plotData.push({ x: labels, y: dataMap.kcal, type: 'bar', marker: { color: cColor }, yaxis: 'y1' });
+                plotData.push({ x: labels, y: dataMap.weight, type: 'scatter', mode: 'lines+markers', line: { color: accColor }, yaxis: 'y2' });
+                layout.yaxis2 = { overlaying: 'y', side: 'right', showticklabels: false };
+            } else if (config.type === 'radar') {
+                labels.forEach((label, i) => {
+                    plotData.push({ type: 'scatterpolar', r: [dataMap.c[i], dataMap.p[i], dataMap.f[i], dataMap.c[i]], theta: ['C', 'P', 'F', 'C'], fill: 'toself' });
+                });
+                layout.polar = { radialaxis: { visible: false } };
+            } else if (config.type === '3d') {
+                plotData.push({ x: dataMap.c, y: dataMap.p, z: dataMap.f, mode: 'markers', type: 'scatter3d', marker: { size: 5, color: dataMap.kcal, colorscale: 'Viridis' } });
+                layout.margin = { l: 0, r: 0, b: 0, t: 0 };
+            }
+
+            window.Plotly.purge(miniPlotRef.current);
+            window.Plotly.newPlot(miniPlotRef.current, plotData, layout, { displayModeBar: false, responsive: true, staticPlot: true }); // staticPlot disabilita interazioni pesanti sulle card
+        }, [report, allDays]);
+
+        return <div ref={miniPlotRef} style={{ width: '100%', height: '220px', marginTop: 'auto' }}></div>;
+    };
+
+    
+
+    
+
     // --- INIZIO RENDER COMPONENTE ---
     return (
         <div style={{
-            display: 'flex', height: '100%', minHeight: '80vh', backgroundColor: '#F5F5F7',
+            display: 'flex', 
+            height: '88vh', /* Blocca l'altezza alla finestra del browser */
+            width: '100%',
+            overflow: 'hidden', /* Impedisce lo scroll dell'intera pagina */
+            backgroundColor: '#F5F5F7',
             fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif',
-            color: '#1D1D1F', margin: '-16px', textAlign: 'left'
+            color: '#1D1D1F', 
+            margin: '-16px', /* Compensa i margini di default del body se presenti */
+            textAlign: 'left'
         }}>
             
             {/* STILI CSS INIETTATI E ADATTATI AL TEMA NUTRIZIONE (VERDE #00C853) */}
@@ -309,10 +887,21 @@ export const DietPlan = ({ patient }) => {
                 
                 /* PULSANTI E AZIONI */
                 .t-btn-sidebar-action { 
-                    width: 100%; padding: 12px; border-radius: 12px; border: none; font-weight: 600; font-size: 13px; 
-                    cursor: pointer; display: flex; align-items: center; gap: 8px; justify-content: center;
-                    transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); 
-                }
+                    width: 80%; 
+                    margin-left: auto; 
+                    margin-right: auto; 
+                    padding: 12px; 
+                    border-radius: 12px; 
+                    border: none; 
+                    font-weight: 600; 
+                    font-size: 13px; 
+                    cursor: pointer; 
+                    display: flex; 
+                    align-items: center; 
+                    gap: 28px; 
+                    justify-content: center;
+                    transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+                }       
                 .t-btn-new { background: #00C853; color: white; }
                 .t-btn-new:hover { transform: translateY(-2px); box-shadow: 0 8px 16px rgba(0, 200, 83, 0.2); }
                 .t-btn-settings { background: transparent; color: #86868B; border: 1px dashed #E5E5EA; }
@@ -436,26 +1025,297 @@ export const DietPlan = ({ patient }) => {
                     .t-sets-table td { border-bottom: 1px solid #F5F5F7; padding: 4px; }
                     .t-sets-table input { border: none !important; background: transparent !important; color: #000; font-weight: 500; padding: 0; }
                 }
+
+                /* --- DASHBOARD E GRAFICI CSS-ONLY --- */
+                .dashboard-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 20px; margin-bottom: 30px; }
+                .chart-card { background: #FFFFFF; border-radius: 20px; padding: 20px; border: 1px solid #E5E5EA; display: flex; flex-direction: column; }
+                .chart-title { font-size: 11px; font-weight: 800; color: #86868B; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 15px; }
+                
+                /* Grafico a Torta */
+                .pie-chart { width: 120px; height: 120px; border-radius: 50%; margin: 0 auto; display: flex; align-items: center; justify-content: center; position: relative; }
+                .pie-hole { width: 70px; height: 70px; background: #FFFFFF; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-direction: column; }
+                
+                /* Istogrammi */
+                .bar-container { display: flex; align-items: flex-end; justify-content: space-between; height: 100px; gap: 8px; margin-top: auto; }
+                .bar-col { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 5px; height: 100%; }
+                .bar-fill { width: 100%; border-radius: 4px 4px 0 0; transition: height 0.5s ease; }
+                .bar-label { font-size: 9px; color: #86868B; font-weight: 700; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+
+                /* Lista Pasti Compatta */
+                .compact-meal-list { background: #FFFFFF; border-radius: 16px; border: 1px solid #E5E5EA; overflow: hidden; }
+                .compact-meal-row { display: flex; justify-content: space-between; align-items: center; padding: 12px 20px; border-bottom: 1px solid #F5F5F7; cursor: pointer; transition: background 0.2s; }
+                .compact-meal-row:hover { background: #F9F9FB; }
+                .compact-meal-row:last-child { border-bottom: none; }
+                
+                /* Contenitore FAB doppio */
+                .fab-container { position: fixed; bottom: 40px; right: 40px; display: flex; gap: 15px; z-index: 100; }
+
+                /* --- SEZIONE REPORT SALVATI (ADATTIVA) --- */
+                .saved-reports-section { margin-top: 50px; border-top: 2px dashed #E5E5EA; padding-top: 40px; }
+                .reports-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 25px; }
+                
+                .report-card { background: #FFFFFF; border-radius: 20px; border: 1px solid #E5E5EA; padding: 20px; display: flex; flex-direction: column; position: relative; transition: all 0.3s ease; page-break-inside: avoid; }
+                .report-card:hover { box-shadow: 0 10px 30px rgba(0,0,0,0.05); transform: translateY(-2px); }
+                
+                /* Layout a doppia larghezza se è presente un commento */
+                .report-card.double { grid-column: span 2; display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+                @media (max-width: 800px) { .report-card.double { grid-column: span 1; grid-template-columns: 1fr; } }
+                
+                .report-card-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px; }
+                .report-card-title { font-size: 15px; font-weight: 800; color: #1D1D1F; margin: 0; }
+                .report-card-subtitle { font-size: 11px; color: #86868B; text-transform: uppercase; font-weight: 700; margin-top: 4px; display: block; }
+                
+                .report-comment-box { background: #F9F9FB; padding: 20px; border-radius: 16px; font-size: 13px; color: #1D1D1F; font-style: italic; border-left: 4px solid #00C853; height: 100%; line-height: 1.6; overflow-y: auto; }
+                .btn-delete-report { background: transparent; border: none; color: #FF3B30; font-weight: 800; cursor: pointer; font-size: 16px; padding: 5px; opacity: 0.5; transition: 0.2s; }
+                .btn-delete-report:hover { opacity: 1; transform: scale(1.1); }
+                /* --- SOTTOBOX GIORNO E CARD RETTANGOLARI PASTI --- */
+                .day-summary-card {
+                    background: #FFFFFF; border-radius: 20px; border: 1px solid #E5E5EA;
+                    padding: 24px; margin-bottom: 30px;
+                }
+                .day-summary-header {
+                    display: flex; justify-content: space-between; align-items: center;
+                    border-bottom: 1px solid #F0F0F2; padding-bottom: 16px; margin-bottom: 20px;
+                }
+                .day-title-input {
+                    font-size: 20px; font-weight: 800; color: #1D1D1F; border: none; background: transparent; outline: none; width: 50%;
+                    transition: color 0.2s;
+                }
+                .day-title-input:focus { color: #00C853; }
+                
+                .day-macro-summary {
+                    display: flex; gap: 15px; font-size: 13px; font-weight: 800;
+                    background: #F5F5F7; padding: 10px 16px; border-radius: 12px;
+                }
+                
+                .meal-rect-grid {
+                    display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 15px;
+                }
+                .meal-rect-card {
+                    background: #F9F9FB; border-radius: 14px; border: 1px solid transparent;
+                    padding: 16px; display: flex; flex-direction: column; gap: 12px;
+                    cursor: pointer; transition: all 0.2s ease;
+                }
+                .meal-rect-card:hover {
+                    background: #FFFFFF; border-color: #00C853; box-shadow: 0 8px 24px rgba(0,200,83,0.08); transform: translateY(-2px);
+                }
+                .meal-title-input {
+                    font-size: 15px; font-weight: 800; color: #1D1D1F; border: none; background: transparent; outline: none; width: 100%;
+                    cursor: text;
+                }
+                .meal-title-input:focus { color: #00C853; }
+                
+                .meal-rect-stats {
+                    display: flex; justify-content: space-between; align-items: flex-end;
+                }
+                .meal-macro-col {
+                    display: flex; flex-direction: column; gap: 3px; font-size: 11px; font-weight: 700; color: #86868B;
+                }
+
+                /* --- NAVIGAZIONE ANALISI SQUIRCLE --- */
+                .analysis-nav {
+                    display: flex; gap: 12px; overflow-x: auto; padding: 10px 0;
+                    scrollbar-width: none; margin-bottom: 25px; 
+                    border-bottom: none; /* Rimossa la riga come richiesto */
+                }
+                .analysis-nav::-webkit-scrollbar { display: none; }
+                
+                .analysis-chip {
+                    padding: 10px 20px; border-radius: 14px; /* Squircle style */
+                    background: #FFFFFF; border: 1px solid #E5E5EA; 
+                    color: #86868B; font-size: 12px; font-weight: 800;
+                    cursor: pointer; white-space: nowrap; transition: all 0.25s ease;
+                    text-transform: uppercase; letter-spacing: 0.5px;
+                }
+                .analysis-chip:hover { border-color: #00C853; color: #00C853; }
+                .analysis-chip.active {
+                    background: #1D1D1F; border-color: #1D1D1F; color: #FFFFFF;
+                    box-shadow: 0 8px 16px rgba(0,0,0,0.1);
+                }
+
+                /* CARD SQUIRCLE */
+                .chart-card { 
+                    background: #FFFFFF; border-radius: 24px; padding: 20px; 
+                    border: 1px solid #E5E5EA; display: flex; flex-direction: column; 
+                }
+                
+                .bar-label-sigla {
+                    font-size: 10px; font-weight: 900; color: #86868B; 
+                    margin-top: 6px; text-transform: uppercase;
+                }
+
+                /* --- LEGENDE E VALORI --- */
+                .chart-legend {
+                    display: flex; gap: 12px; justify-content: center; 
+                    margin-top: 15px; flex-wrap: wrap;
+                }
+                .legend-item {
+                    display: flex; align-items: center; gap: 5px; 
+                    font-size: 10px; font-weight: 800; color: #86868B; text-transform: uppercase;
+                }
+                .legend-dot {
+                    width: 8px; height: 8px; border-radius: 2px; /* Squircle mini */
+                }
+                .bar-value-top {
+                    font-size: 9px; font-weight: 900; color: #1D1D1F; 
+                    margin-bottom: 4px; text-align: center;
+                }
+                .scope-indicator {
+                    font-size: 9px; font-weight: 800; color: #00C853; 
+                    background: #F2FFF7; padding: 2px 8px; border-radius: 6px;
+                    margin-bottom: 10px; display: inline-block; align-self: flex-start;
+                }
+
+                /* --- MODALE SETUP CLINICO: STILI SQUIRCLE --- */
+
+                .modal-backdrop {
+                    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+                    background: rgba(0, 0, 0, 0.4); backdrop-filter: blur(8px);
+                    display: flex; align-items: center; justify-content: center; z-index: 9999;
+                }
+
+                .modal-window {
+                    background: #FFFFFF; border-radius: 32px; /* Apple Squircle Style */
+                    box-shadow: 0 20px 60px rgba(0,0,0,0.15);
+                    overflow: hidden; border: 1px solid rgba(255,255,255,0.3);
+                }
+
+                /* Navigazione a Schede (Segmented Control) */
+                .setup-tab-nav {
+                    display: flex; gap: 4px; background: #F2F2F7; padding: 4px; 
+                    border-radius: 14px; margin-bottom: 25px;
+                }
+
+                .setup-tab-btn {
+                    flex: 1; padding: 10px; border-radius: 10px; border: none; 
+                    font-size: 11px; font-weight: 800; cursor: pointer; 
+                    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); 
+                    background: transparent; color: #8E8E93;
+                }
+
+                .setup-tab-btn.active {
+                    background: #FFFFFF; color: #1D1D1F; 
+                    box-shadow: 0 3px 8px rgba(0,0,0,0.08);
+                }
+
+                /* Griglia Antropometria */
+                .setup-grid {
+                    display: grid; grid-template-columns: 1.2fr 0.8fr; gap: 24px;
+                }
+
+                /* Box dei Risultati (Metriche) */
+                .metric-box {
+                    background: #FFFFFF; padding: 16px; border-radius: 18px; 
+                    border: 1px solid #E5E5EA; text-align: center;
+                    display: flex; flex-direction: column; justify-content: center;
+                    transition: transform 0.2s;
+                }
+
+                .metric-box:hover { transform: scale(1.02); border-color: #00C853; }
+
+                .metric-value {
+                    font-size: 22px; font-weight: 900; color: #1D1D1F; display: block;
+                    letter-spacing: -0.5px;
+                }
+
+                .metric-label {
+                    font-size: 9px; font-weight: 800; color: #86868B; 
+                    text-transform: uppercase; margin-top: 4px; letter-spacing: 0.5px;
+                }
+
+                /* Input flottanti all'interno del modale */
+                .t-input-floating {
+                    display: flex; flex-direction: column; gap: 5px; margin-bottom: 12px;
+                }
+
+                .t-input-floating label {
+                    font-size: 10px; font-weight: 800; color: #86868B; text-transform: uppercase;
+                }
+
+                .t-input-floating input, .t-input-floating select {
+                    width: 100%; padding: 12px 16px; border-radius: 12px; 
+                    border: 1px solid #E5E5EA; background: #FFFFFF; 
+                    font-size: 15px; font-weight: 600; outline: none;
+                }
+
+                .t-input-floating input:focus { border-color: #00C853; background: #F2FFF7; }
+
+                /* --- STILI PER LE SMART CARD CLINICHE --- */
+                .smart-card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
+                .smart-card { 
+                    background: #FFFFFF; border-radius: 20px; border: 1px solid #E5E5EA; 
+                    padding: 20px; display: flex; flex-direction: column; position: relative;
+                    box-shadow: 0 4px 15px rgba(0,0,0,0.02);
+                }
+                .smart-badge { 
+                    position: absolute; top: 16px; right: 16px; padding: 4px 10px; 
+                    border-radius: 8px; font-size: 10px; font-weight: 800; text-transform: uppercase;
+                    color: #FFFFFF;
+                }
+                .smart-title { font-size: 11px; font-weight: 800; color: #86868B; text-transform: uppercase; margin-bottom: 8px; }
+                .smart-value { font-size: 26px; font-weight: 900; color: #1D1D1F; line-height: 1; }
+                .smart-sub { font-size: 11px; font-weight: 600; color: #86868B; margin-top: 8px; }
+
+                /* Segmented Control Interno (Per scelta peso) */
+                .segmented-control { display: flex; background: #F2F2F7; padding: 4px; border-radius: 12px; }
+                .segmented-btn { 
+                    flex: 1; padding: 8px; border: none; background: transparent; color: #8E8E93; 
+                    border-radius: 8px; font-size: 11px; font-weight: 800; cursor: pointer; transition: 0.2s; 
+                }
+                .segmented-btn.active { background: #FFFFFF; color: #1D1D1F; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
+
+                /* Tabella Matrice Pasti */
+                .matrix-table { width: 100%; border-collapse: collapse; margin-top: 15px; font-size: 12px; }
+                .matrix-table th { text-align: left; padding: 10px; color: #86868B; border-bottom: 1px solid #E5E5EA; font-weight: 800; }
+                .matrix-table td { padding: 10px; border-bottom: 1px solid #F5F5F7; font-weight: 700; color: #1D1D1F; }
+                .matrix-input { width: 50px; padding: 6px; border-radius: 8px; border: 1px solid #E5E5EA; text-align: center; font-weight: 800; }
+
+                /* --- STILI SPECIFICI PER TABELLA LAF 24H --- */
+                .laf-input {
+                    width: 100%; 
+                    border: 1px solid transparent; 
+                    background: transparent; 
+                    font-weight: 700; 
+                    outline: none; 
+                    padding: 8px; 
+                    border-radius: 8px; 
+                    transition: all 0.2s ease;
+                    color: #1D1D1F;
+                }
+
+                .laf-input:focus, .laf-input:hover {
+                    background: #F2F2F7;
+                    border-color: #E5E5EA;
+                }
+
+                .laf-input.number {
+                    text-align: center;
+                    font-weight: 900;
+                    font-size: 14px;
+                    background: #F9F9FB;
+                    border: 1px solid #E5E5EA;
+                }
+
+                .laf-input.number:focus {
+                    border-color: #00C853;
+                    background: #F2FFF7;
+                    color: #00C853;
+                }
+
+                .laf-row {
+                    transition: background 0.2s ease;
+                }
+
+                .laf-row:hover {
+                    background: #FAFAFC;
+                }
+
             `}</style>
 
             {/* --- SIDEBAR DI NAVIGAZIONE --- */}
             <nav className="t-sidebar" style={{ paddingBottom: 0 }}>
                 
-                {/* 1. PANNELLO LIVE TRACKING (Fisso in cima all'indice) */}
-                <div style={{ 
-                    marginBottom: '20px', padding: '15px', background: '#FFFFFF', 
-                    borderRadius: '16px', border: '1px solid #E5E5EA', 
-                    boxShadow: '0 4px 15px rgba(0,0,0,0.03)', flexShrink: 0 
-                }}>
-                    <div style={{ fontSize: '11px', fontWeight: 800, color: '#1D1D1F', textTransform: 'uppercase', marginBottom: '15px', letterSpacing: '0.5px' }}>
-                        Tracking: {activeDay?.title || '-'}
-                    </div>
-                    {/* Utilizza la funzione ausiliaria creata nella Parte 3 */}
-                    {renderProgressBar("Kcal", activeDayTotals.kcal, targets.kcal, "#1D1D1F")}
-                    {renderProgressBar("Carbo", activeDayTotals.c, targetGrams.c, "#1D1D1F")}
-                    {renderProgressBar("Proteine", activeDayTotals.p, targetGrams.p, "#00C853")}
-                    {renderProgressBar("Grassi", activeDayTotals.f, targetGrams.f, "#86868B")}
-                </div>
+                
 
                 {/* 2. INDICE DRAG & DROP DEI GIORNI E PASTI */}
                 <ul className="t-nav-list" style={{ paddingBottom: '20px' }}>
@@ -537,7 +1397,7 @@ export const DietPlan = ({ patient }) => {
                         + Nuovo Giorno
                     </button>
                     {/* Tasto per aprire un modale (non ancora creato) per il Setup Kcal */}
-                    <button className="t-btn-sidebar-action t-btn-settings" onClick={() => alert("Apri Setup Target (in sviluppo)")} style={{ background: '#F5F5F7', color: '#1D1D1F', border: 'none' }}>
+                    <button className="t-btn-sidebar-action t-btn-settings" onClick={() => setIsSetupOpen(true)} style={{ background: '#F5F5F7', color: '#1D1D1F', border: 'none' }}>
                         Setup Obiettivi
                     </button>
                     {/* Tasto che aprirà il Database Alimenti */}
@@ -548,67 +1408,261 @@ export const DietPlan = ({ patient }) => {
             </nav>
 
 {/* --- AREA CENTRALE (DASHBOARD E STAMPA) --- */}
+            {/* --- AREA CENTRALE (DASHBOARD ANALITICA) --- */}
             <main className="t-main-content">
-                <div className="t-container-wrapper" style={{ height: '100%' }}>
-                    
-                    {/* INTESTAZIONE CLIENTE E RECAP OBIETTIVI (Visibile in app e in stampa) */}
-                    <div className="t-client-header-card">
-                        <div className="t-input-floating">
-                            <label>Cliente</label>
-                            <input type="text" defaultValue={patient ? `${patient.nome} ${patient.cognome}` : ''} placeholder="Nome Cognome"/>
+    <div className="t-container-wrapper">
+        
+        {/* 1. INTESTAZIONE CLIENTE */}
+        <div className="t-client-header-card">
+            <div className="t-input-floating">
+                <label>Cliente</label>
+                <input type="text" defaultValue={patient ? `${patient.nome} ${patient.cognome}` : ''} placeholder="Nome Cognome"/>
+            </div>
+            <div className="t-input-floating">
+                <label>Data Inizio</label>
+                <input type="date" defaultValue={new Date().toISOString().split('T')[0]}/>
+            </div>
+            <div className="t-input-floating">
+                <label>Target Kcal</label>
+                <div style={{ padding: '12px 16px', fontSize: '18px', fontWeight: 800, color: '#00C853' }}>
+                    {targets.kcal} kcal
+                </div>
+            </div>
+        </div>
+
+        {/* 2. DASHBOARD ANALITICA (Solo se c'è un giorno attivo) */}
+        {/* --- MODULO ANALISI TECNICA CON LEGENDE --- */}
+        <section className="no-print" style={{ marginBottom: '40px' }}>
+            
+            <div className="analysis-nav">
+                <div 
+                    className={`analysis-chip ${analysisTargetId === 'all' ? 'active' : ''}`}
+                    onClick={() => setAnalysisTargetId('all')}
+                >
+                    Piano Completo
+                </div>
+                {dietDays.map((day, idx) => (
+                    <div 
+                        key={day.id}
+                        className={`analysis-chip ${analysisTargetId === day.id ? 'active' : ''}`}
+                        onClick={() => setAnalysisTargetId(day.id)}
+                    >
+                        G{idx + 1}
+                    </div>
+                ))}
+            </div>
+
+            {(() => {
+                let stats = [];
+                let totals = { kcal: 0, p: 0, c: 0, f: 0 };
+                const isAll = analysisTargetId === 'all';
+                
+                if (isAll) {
+                    stats = dietDays.map((d, i) => ({
+                        sigla: `G${i + 1}`,
+                        totals: calculateTotals(d.meals.flatMap(m => m.items))
+                    }));
+                } else {
+                    const selectedDay = dietDays.find(d => d.id === analysisTargetId);
+                    if (!selectedDay) return null;
+                    stats = selectedDay.meals.map((m, i) => ({
+                        sigla: `P${i + 1}`,
+                        totals: calculateTotals(m.items)
+                    }));
+                }
+
+                totals = stats.reduce((acc, curr) => ({
+                    kcal: acc.kcal + curr.totals.kcal, 
+                    p: acc.p + curr.totals.p, 
+                    c: acc.c + curr.totals.c, 
+                    f: acc.f + curr.totals.f
+                }), { kcal: 0, p: 0, c: 0, f: 0 });
+
+                const maxKcal = Math.max(...stats.map(s => s.totals.kcal), 1);
+                const totalMacro = (totals.p + totals.c + totals.f) || 1;
+
+                return (
+                    <div className="dashboard-grid">
+                        
+                        {/* 1. Torta Composizione con Legenda */}
+                        <div className="chart-card">
+                            <span className="scope-indicator">{isAll ? 'PIANO SETTIMANALE' : 'DETTAGLIO GIORNO'}</span>
+                            <div className="chart-title">Macro Totali</div>
+                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: 1, justifyContent: 'center' }}>
+                                <div className="pie-chart" style={{ 
+                                    background: `conic-gradient(#00C853 ${(totals.p/totalMacro)*100}%, #1D1D1F 0 ${((totals.p+totals.c)/totalMacro)*100}%, #86868B 0 100%)`,
+                                    width: '100px', height: '100px' 
+                                }}>
+                                    <div className="pie-hole" style={{ width: '70px', height: '70px' }}>
+                                        <span style={{ fontSize: '18px', fontWeight: 900 }}>{Math.round(totals.kcal)}</span>
+                                        <span style={{ fontSize: '8px', fontWeight: 800, color: '#86868B' }}>KCAL</span>
+                                    </div>
+                                </div>
+                                <div className="chart-legend">
+                                    <div className="legend-item"><div className="legend-dot" style={{background:'#1D1D1F'}}></div> CAR {Math.round((totals.c/totalMacro)*100)}%</div>
+                                    <div className="legend-item"><div className="legend-dot" style={{background:'#00C853'}}></div> PRO {Math.round((totals.p/totalMacro)*100)}%</div>
+                                    <div className="legend-item"><div className="legend-dot" style={{background:'#86868B'}}></div> FAT {Math.round((totals.f/totalMacro)*100)}%</div>
+                                </div>
+                            </div>
                         </div>
-                        <div className="t-input-floating">
-                            <label>Data Inizio</label>
-                            <input type="date" defaultValue={new Date().toISOString().split('T')[0]}/>
+
+                        {/* 2. Istogramma Calorie con Valori Esposti */}
+                        <div className="chart-card">
+                            <span className="scope-indicator">ANDAMENTO ENERGETICO</span>
+                            <div className="chart-title">Kcal per {isAll ? 'Giorno' : 'Pasto'}</div>
+                            <div className="bar-container" style={{ paddingBottom: '10px' }}>
+                                {stats.map((s, i) => (
+                                    <div key={i} className="bar-col">
+                                        <div className="bar-value-top">{Math.round(s.totals.kcal)}</div>
+                                        <div className="bar-fill" style={{ 
+                                            height: `${(s.totals.kcal / maxKcal) * 75}%`, 
+                                            background: '#1D1D1F', borderRadius: '4px' 
+                                        }}></div>
+                                        <div className="bar-label-sigla">{s.sigla}</div>
+                                    </div>
+                                ))}
+                            </div>
+                            <div className="chart-legend">
+                                <span style={{fontSize: '9px', color: '#86868B', fontWeight: 800}}>{isAll ? 'G = GIORNO' : 'P = PASTO'}</span>
+                            </div>
                         </div>
-                        <div className="t-input-floating">
-                            <label>Target Kcal</label>
-                            <div style={{ padding: '12px 16px', fontSize: '18px', fontWeight: 800, color: '#00C853' }}>
-                                {targets.kcal} kcal
+
+                        {/* 3. Bilanciamento Macro con Legenda Colori */}
+                        <div className="chart-card">
+                            <span className="scope-indicator">SCOMPOSIZIONE INTERNA</span>
+                            <div className="chart-title">Rapporto Nutrienti</div>
+                            <div className="bar-container">
+                                {stats.map((s, i) => {
+                                    const mTotal = (s.totals.p + s.totals.c + s.totals.f) || 1;
+                                    return (
+                                        <div key={i} className="bar-col" style={{ width: '100%' }}>
+                                            <div style={{ display: 'flex', flexDirection: 'column', height: '100%', width: '16px', borderRadius: '4px', overflow: 'hidden' }}>
+                                                <div style={{ height: `${(s.totals.p / mTotal) * 100}%`, background: '#00C853' }} title={`Pro: ${s.totals.p.toFixed(1)}g`}></div>
+                                                <div style={{ height: `${(s.totals.c / mTotal) * 100}%`, background: '#1D1D1F' }} title={`Car: ${s.totals.c.toFixed(1)}g`}></div>
+                                                <div style={{ height: `${(s.totals.f / mTotal) * 100}%`, background: '#86868B' }} title={`Fat: ${s.totals.f.toFixed(1)}g`}></div>
+                                            </div>
+                                            <div className="bar-label-sigla">{s.sigla}</div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                            <div className="chart-legend">
+                                <div className="legend-item"><div className="legend-dot" style={{background:'#1D1D1F'}}></div> C</div>
+                                <div className="legend-item"><div className="legend-dot" style={{background:'#00C853'}}></div> P</div>
+                                <div className="legend-item"><div className="legend-dot" style={{background:'#86868B'}}></div> F</div>
                             </div>
                         </div>
                     </div>
+                );
+            })()}
+        </section>
 
-                    {/* STATO VUOTO (Se non ci sono pasti da mostrare per il giorno attivo) */}
-                    {activeDay?.meals.length === 0 && (
-                        <div style={{ width: '100%', minHeight: '400px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#86868B', background: 'rgba(255,255,255,0.5)', borderRadius: '24px', border: '2px dashed #E5E5EA' }}>
-                            <h3 style={{ fontSize: '20px', fontWeight: 600, color: '#1D1D1F' }}>Nessun pasto in questo giorno</h3>
-                            <p style={{ fontSize: '14px' }}>Usa il pulsante nella barra laterale per aggiungere il primo pasto.</p>
+        {/* 3. PANORAMICA DEL PIANO ALIMENTARE (Tutti i giorni) */}
+        <div style={{ marginTop: '40px', marginBottom: '20px', borderBottom: '2px solid #E5E5EA', paddingBottom: '10px' }}>
+            <span style={{ fontSize: '22px', fontWeight: 800, color: '#1D1D1F' }}>Panoramica del Piano Alimentare</span>
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+            {dietDays.map((day) => {
+                const currentDayMeals = day.meals || [];
+                const currentMealStats = currentDayMeals.map(m => ({ 
+                    title: m.title, totals: calculateTotals(m.items), id: m.id 
+                }));
+                
+                const currentDayTotals = currentMealStats.reduce((acc, curr) => ({
+                    kcal: acc.kcal + curr.totals.kcal, p: acc.p + curr.totals.p, c: acc.c + curr.totals.c, f: acc.f + curr.totals.f
+                }), { kcal: 0, p: 0, c: 0, f: 0 });
+
+                return (
+                    <div key={day.id} id={day.id} className="day-summary-card">
+                        <div className="day-summary-header">
+                            <input 
+                                type="text" 
+                                className="day-title-input" 
+                                value={day.title} 
+                                onChange={e => updateDayTitle(day.id, e.target.value)} 
+                                placeholder="Nome Giornata..."
+                            />
+                            <div className="day-macro-summary no-print">
+                                <span style={{ color: '#1D1D1F' }}>{currentDayTotals.kcal.toFixed(0)} kcal</span>
+                                <span style={{ color: '#1D1D1F' }}>C: {currentDayTotals.c.toFixed(0)}g</span>
+                                <span style={{ color: '#00C853' }}>P: {currentDayTotals.p.toFixed(0)}g</span>
+                                <span style={{ color: '#86868B' }}>F: {currentDayTotals.f.toFixed(0)}g</span>
+                            </div>
                         </div>
-                    )}
 
-                    {/* PANORAMICA DEL GIORNO ATTIVO (Mostra tutti i pasti e gli alimenti, utile per la stampa) */}
-                    {activeDay && activeDay.meals.map(meal => {
-                        const mealTotals = calculateTotals(meal.items);
-                        return (
-                            <div key={meal.id} className="t-meal-card" style={{ background: '#FFFFFF', borderRadius: '24px', padding: '25px', marginBottom: '25px', border: '1px solid #E5E5EA' }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px', borderBottom: '1px solid #F0F0F2', paddingBottom: '15px' }}>
-                                    <h3 style={{ fontSize: '20px', fontWeight: 800, margin: 0, color: '#1D1D1F' }}>{meal.title}</h3>
-                                    
-                                    {/* Etichette riassuntive del pasto (visibili a colpo d'occhio) */}
-                                    <div style={{ display: 'flex', gap: '12px', fontSize: '12px', fontWeight: 700, background: '#F5F5F7', padding: '6px 12px', borderRadius: '8px' }}>
-                                        <span style={{ color: '#1D1D1F' }}>{mealTotals.kcal.toFixed(0)} kcal</span>
-                                        <span style={{ color: '#86868B' }}>C {mealTotals.c.toFixed(1)}g</span>
-                                        <span style={{ color: '#00C853' }}>P {mealTotals.p.toFixed(1)}g</span>
-                                        <span style={{ color: '#86868B' }}>F {mealTotals.f.toFixed(1)}g</span>
-                                    </div>
-                                </div>
-
-                                {/* Lista in sola lettura per l'area principale / stampa */}
-                                {meal.items.map((item, idx) => (
-                                    <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid #F9F9FB', fontSize: '14px' }}>
-                                        <div style={{ fontWeight: 600 }}>{idx + 1}. {item.name || 'Alimento non specificato'}</div>
-                                        <div style={{ display: 'flex', gap: '20px', color: '#86868B' }}>
-                                            <span style={{ width: '60px', textAlign: 'right', fontWeight: 700, color: '#1D1D1F' }}>{item.weight}g</span>
-                                            <span style={{ width: '60px', textAlign: 'right' }}>{((item.kcal * item.weight) / 100).toFixed(0)} kcal</span>
+                        <div className="meal-rect-grid">
+                            {currentMealStats.map((m) => (
+                                <div 
+                                    key={m.id} 
+                                    className="meal-rect-card" 
+                                    onClick={() => setActiveMealInfo({ dayId: day.id, mealId: m.id })}
+                                >
+                                    <input 
+                                        type="text" 
+                                        className="meal-title-input" 
+                                        value={m.title} 
+                                        onClick={(e) => e.stopPropagation()} 
+                                        onChange={e => updateMealTitle(day.id, m.id, e.target.value)} 
+                                    />
+                                    <div className="meal-rect-stats">
+                                        <div className="meal-macro-col">
+                                            <span><span style={{ color: '#1D1D1F' }}>C:</span> {m.totals.c.toFixed(0)}g</span>
+                                            <span><span style={{ color: '#00C853' }}>P:</span> {m.totals.p.toFixed(0)}g</span>
+                                            <span><span style={{ color: '#86868B' }}>F:</span> {m.totals.f.toFixed(0)}g</span>
+                                        </div>
+                                        <div style={{ fontSize: '20px', fontWeight: 800, color: '#00C853', lineHeight: '1' }}>
+                                            {m.totals.kcal.toFixed(0)}
                                         </div>
                                     </div>
-                                ))}
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                );
+            })}
+        </div>
+
+        {/* 4. ARCHIVIO REPORT CLINICI (Adattivo in fondo alla pagina) */}
+        {savedReports.length > 0 && (
+            <div className="saved-reports-section" style={{ marginTop: '50px', paddingBottom: '60px' }}>
+                <div style={{ marginBottom: '25px', borderBottom: '2px solid #E5E5EA', paddingBottom: '10px' }}>
+                    <span style={{ fontSize: '22px', fontWeight: 800, color: '#1D1D1F' }}>Archivio Report Clinici</span>
+                </div>
+                
+                <div className="reports-grid">
+                    {savedReports.map(report => {
+                        const hasComment = report.config.comment && report.config.comment.trim() !== '';
+                        return (
+                            <div key={report.id} className={`report-card ${hasComment ? 'double' : ''}`}>
+                                <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+                                    <div className="report-card-header">
+                                        <div>
+                                            <h4 className="report-card-title">{report.dayTitle}</h4>
+                                            <span className="report-card-subtitle">
+                                                Data: {report.date} • {report.config.type.toUpperCase()}
+                                            </span>
+                                        </div>
+                                        <button className="btn-delete-report no-print" onClick={() => deleteReport(report.id)}>✕</button>
+                                    </div>
+                                    <MiniReportChart report={report} allDays={dietDays} />
+                                </div>
+
+                                {hasComment && (
+                                    <div className="report-comment-box">
+                                        <span style={{ display: 'block', fontSize: '10px', color: '#00C853', fontWeight: 800, textTransform: 'uppercase', marginBottom: '8px', letterSpacing: '0.5px' }}>Note Cliniche</span>
+                                        {report.config.comment}
+                                    </div>
+                                )}
                             </div>
                         );
                     })}
                 </div>
-            </main>
+            </div>
+        )}
+
+    </div>
+</main>
 
             {/* --- FINESTRA MODALE IN SOVRAPPRESSIONE PER COMPILARE IL PASTO --- */}
             {activeMealInfo && (() => {
@@ -730,78 +1784,390 @@ export const DietPlan = ({ patient }) => {
 
             {/* --- PULSANTE STAMPA GALLEGGIANTE --- */}
             {/* Invisibile in fase di stampa grazie alle media query nel CSS */}
-            <button className="t-fab-print no-print" onClick={() => window.print()}>
-                <span style={{ fontSize: '14px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '1px' }}>Stampa</span>
-            </button>
+            {/* --- PULSANTI FLUTTUANTI DOPPI --- */}
+            <div className="fab-container no-print">
+                <button className="t-fab-print" onClick={() => setIsSmartOpen(true)} style={{ position: 'relative', bottom: 'auto', right: 'auto', background: 'linear-gradient(135deg, #00C853 0%, #009624 100%)' }} title="Smart Chart Maker">
+                    <span style={{ fontSize: '20px' }}>Smart</span>
+                </button>
+                <button className="t-fab-print" onClick={() => window.print()} style={{ position: 'relative', bottom: 'auto', right: 'auto' }} title="Stampa Documento">
+                    <span style={{ fontSize: '14px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '1px' }}>Stampa</span>
+                </button>
+            </div>
 
-            {/* --- MODALE SETUP OBIETTIVI (TARGET NUTRIZIONALI) --- */}
-            {isSetupOpen && (
-                <div className="modal-backdrop">
-                    <div className="modal-window" style={{ maxWidth: '600px', height: 'auto' }}>
+
+            
+        {/* --- SUB-MODALE: CALCOLATORE LAF 24 ORE (METODO FATTORIALE) --- */}
+            {isLafModalOpen && (
+                <div className="modal-backdrop" style={{ zIndex: 10000 }}>
+                    <div className="modal-window" style={{ width: '650px', maxWidth: '95%', padding: '0', background: '#FAFAFC' }}>
                         
-                        {/* HEADER SETUP */}
-                        <div style={{ padding: '25px 40px', borderBottom: '1px solid #F0F0F2', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <h3 style={{ fontSize: '22px', fontWeight: 800, margin: 0, color: '#1D1D1F' }}>Setup Obiettivi Nutrizionali</h3>
-                            <button onClick={() => setIsSetupOpen(false)} style={{ border: 'none', background: 'transparent', fontSize: '20px', cursor: 'pointer', color: '#86868B', fontWeight: 800 }}>X</button>
-                        </div>
-                        
-                        {/* CORPO SETUP */}
-                        <div style={{ padding: '40px', background: '#FAFAFC' }}>
-                            
-                            {/* Input Kcal Totali */}
-                            <div style={{ marginBottom: '30px' }}>
-                                <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: '#86868B', textTransform: 'uppercase', marginBottom: '10px' }}>
-                                    Target Kcal Giornaliere
-                                </label>
-                                <input 
-                                    type="number" 
-                                    value={targets.kcal} 
-                                    onChange={e => setTargets(prev => ({ ...prev, kcal: Number(e.target.value) }))} 
-                                    style={{ width: '100%', padding: '15px', fontSize: '28px', fontWeight: 800, borderRadius: '12px', border: '1px solid #E5E5EA', textAlign: 'center', color: '#00C853', outline: 'none' }} 
-                                />
-                            </div>
-                            
-                            {/* Slider per le percentuali dei Macronutrienti */}
-                            {['c', 'p', 'f'].map(macro => {
-                                const labels = { c: 'Carboidrati', p: 'Proteine', f: 'Grassi' };
-                                const colors = { c: '#1D1D1F', p: '#00C853', f: '#86868B' };
-                                return (
-                                    <div key={macro} style={{ marginBottom: '20px' }}>
-                                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', fontSize: '14px', fontWeight: 700 }}>
-                                            <span style={{ color: '#1D1D1F' }}>{labels[macro]}</span>
-                                            <span style={{ color: colors[macro], fontSize: '16px', fontWeight: 800 }}>{targets[macro]}%</span>
-                                        </div>
-                                        {/* Range slider per un bilanciamento rapido e visivo */}
-                                        <input 
-                                            type="range" min="0" max="100" 
-                                            value={targets[macro]} 
-                                            onChange={e => setTargets(prev => ({ ...prev, [macro]: Number(e.target.value) }))} 
-                                            style={{ width: '100%', cursor: 'pointer' }} 
-                                        />
-                                    </div>
-                                )
-                            })}
-                            
-                            {/* Validazione della somma delle percentuali */}
-                            <div style={{ marginTop: '30px', background: '#FFFFFF', padding: '20px', borderRadius: '12px', textAlign: 'center', fontSize: '15px', fontWeight: 700, border: '1px solid #E5E5EA' }}>
-                                Totale Macronutrienti: {targets.c + targets.p + targets.f}% 
-                                {(targets.c + targets.p + targets.f) !== 100 && (
-                                    <span style={{ color: '#FF3B30', display: 'block', marginTop: '5px', fontSize: '13px' }}>
-                                        Attenzione: La somma deve essere esattamente 100%
-                                    </span>
-                                )}
-                            </div>
+                        <div style={{ padding: '20px', borderBottom: '1px solid #E5E5EA', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'white' }}>
+                            <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 900 }}>Calcolatore LAF (Metodo 24h)</h3>
+                            <button onClick={() => setIsLafModalOpen(false)} style={{ border: 'none', background: 'transparent', fontSize: '20px', cursor: 'pointer', fontWeight: 900 }}>✕</button>
                         </div>
 
-                        {/* FOOTER SETUP */}
-                        <div style={{ padding: '20px 40px', borderTop: '1px solid #F0F0F2', background: '#FFFFFF', display: 'flex', justifyContent: 'flex-end' }}>
-                            <button onClick={() => setIsSetupOpen(false)} style={{ background: '#1D1D1F', color: 'white', padding: '12px 35px', borderRadius: '12px', border: 'none', fontWeight: 700, cursor: 'pointer' }}>
-                                Salva e Chiudi
+                        <div style={{ padding: '20px' }}>
+                            {/* Pre-caricamento Giornata Tipo */}
+                            <div style={{ marginBottom: '20px', display: 'flex', gap: '10px', alignItems: 'center' }}>
+                                <span style={{ fontSize: '11px', fontWeight: 800, color: '#86868B' }}>CARICA GIORNATA TIPO:</span>
+                                <button onClick={() => applyLafTemplate('sedentario')} className="setup-tab-btn" style={{ background: 'white', border: '1px solid #E5E5EA' }}>Sedentario</button>
+                                <button onClick={() => applyLafTemplate('leggero')} className="setup-tab-btn" style={{ background: 'white', border: '1px solid #E5E5EA' }}>Leggero</button>
+                                <button onClick={() => applyLafTemplate('attivo')} className="setup-tab-btn" style={{ background: 'white', border: '1px solid #E5E5EA' }}>Attivo</button>
+                            </div>
+
+                            {/* Tabella 24 Ore */}
+                            <table className="matrix-table" style={{ background: 'white', borderRadius: '12px', overflow: 'hidden', boxShadow: '0 2px 10px rgba(0,0,0,0.02)' }}>
+                                <thead style={{ background: '#F5F5F7' }}>
+                                    <tr>
+                                        <th>Attività</th>
+                                        <th style={{ textAlign: 'center' }}>Coeff. (PAL)</th>
+                                        <th style={{ textAlign: 'center' }}>Ore</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {lafActivities.map((act, index) => (
+                                        <tr key={act.id} className="laf-row">
+                                            <td>
+                                                <input 
+                                                    type="text" 
+                                                    className="laf-input"
+                                                    value={act.name} 
+                                                    onChange={e => {
+                                                        const newActs = [...lafActivities];
+                                                        newActs[index].name = e.target.value;
+                                                        setLafActivities(newActs);
+                                                    }} 
+                                                />
+                                            </td>
+                                            <td style={{ textAlign: 'center', padding: '5px' }}>
+                                                <input 
+                                                    type="number" step="0.1" 
+                                                    className="laf-input number"
+                                                    value={act.pal} 
+                                                    onChange={e => {
+                                                        const newActs = [...lafActivities];
+                                                        newActs[index].pal = parseFloat(e.target.value) || 0;
+                                                        setLafActivities(newActs);
+                                                    }} 
+                                                />
+                                            </td>
+                                            <td style={{ textAlign: 'center', padding: '5px' }}>
+                                                <input 
+                                                    type="number" step="0.5" 
+                                                    className="laf-input number"
+                                                    value={act.hours} 
+                                                    onChange={e => {
+                                                        const newActs = [...lafActivities];
+                                                        newActs[index].hours = parseFloat(e.target.value) || 0;
+                                                        setLafActivities(newActs);
+                                                    }} 
+                                                />
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+
+                            {/* Controlli Totali */}
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '20px', padding: '15px', background: totalLafHours === 24 ? '#F2FFF7' : '#FFF0F0', borderRadius: '12px', border: `1px solid ${totalLafHours === 24 ? '#00C853' : '#FF3B30'}` }}>
+                                <div>
+                                    <span style={{ fontSize: '11px', fontWeight: 800, color: totalLafHours === 24 ? '#00C853' : '#FF3B30', display: 'block' }}>SOMMA ORE</span>
+                                    <span style={{ fontSize: '20px', fontWeight: 900 }}>{totalLafHours} / 24</span>
+                                </div>
+                                <div style={{ textAlign: 'right' }}>
+                                    <span style={{ fontSize: '11px', fontWeight: 800, color: '#86868B', display: 'block' }}>LAF FINALE</span>
+                                    <span style={{ fontSize: '24px', fontWeight: 900, color: '#1D1D1F' }}>{totalLafHours === 24 ? calculatedLAF : '---'}</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div style={{ padding: '20px', background: 'white', borderTop: '1px solid #E5E5EA', display: 'flex', justifyContent: 'flex-end' }}>
+                            <button 
+                                disabled={totalLafHours !== 24}
+                                onClick={() => {
+                                    setCalcData({ ...calcData, laf: parseFloat(calculatedLAF) });
+                                    setIsLafModalOpen(false);
+                                }} 
+                                style={{ background: totalLafHours === 24 ? '#00C853' : '#E5E5EA', color: totalLafHours === 24 ? 'white' : '#86868B', padding: '12px 30px', borderRadius: '10px', border: 'none', fontWeight: 900, cursor: totalLafHours === 24 ? 'pointer' : 'not-allowed' }}
+                            >
+                                TRASFERISCI AL PIANO
                             </button>
                         </div>
                     </div>
                 </div>
             )}
+
+            {/* --- MODALE SETUP OBIETTIVI (TARGET NUTRIZIONALI) --- */}
+            {/* --- MODALE SETUP OBIETTIVI CLINICO --- */}
+
+            {/* --- MODALE SETUP OBIETTIVI CLINICO (PRO) --- */}
+            {isSetupOpen && (() => {
+                // Calcoli in tempo reale per le Smart Card
+                const bmi = calcData.weight / Math.pow(calcData.height/100, 2);
+                const bmiStatus = getBMICategory(bmi);
+                const idealW = calculateIdealWeight(calcData.sex, calcData.height);
+                const adjustedW = getAdjustedWeight(calcData.weight, idealW);
+                const whr = calcData.waist / calcData.hip;
+                const whrStatus = getWHRCategory(whr, calcData.sex);
+                const grant = calcData.height / calcData.wrist;
+                
+                const rmr = calculateRMR(calcData);
+                const tdee = Math.round(rmr * calcData.laf);
+
+                // Calcolo Grammi totali giornalieri (4kcal per C e P, 9kcal per F)
+                const totalC_kcal = tdee * (calcData.macroTargets.c / 100);
+                const totalP_kcal = tdee * (calcData.macroTargets.p / 100);
+                const totalF_kcal = tdee * (calcData.macroTargets.f / 100);
+                const totalC_g = totalC_kcal / 4;
+                const totalP_g = totalP_kcal / 4;
+                const totalF_g = totalF_kcal / 9;
+
+                // Calcolo totali della partizione (ora è un Array, usiamo map/reduce sui 'value')
+                const totalDist = calcData.distribution.reduce((acc, curr) => acc + (Number(curr.value) || 0), 0);
+                
+                // Calcolo errore per il colore di sfondo (più ti allontani da 100, più diventa rosso)
+                const distDiff = Math.abs(100 - totalDist);
+                const errorOpacity = setupTab === 'partizione matriciale' ? Math.min(distDiff * 0.015, 0.2) : 0; // Max 20% di rosso
+                const bgDynamicColor = totalDist === 100 && setupTab === 'partizione matriciale' 
+                    ? '#F2FFF7' // Verdino se perfetto
+                    : `rgba(255, 59, 48, ${errorOpacity})`; // Sfumatura rossa progressiva se sbagli percentuale
+
+                return (
+                    <div className="modal-backdrop">
+                        {/* FINESTRA PRINCIPALE SQUIRCLE */}
+                        <div className="modal-window" style={{ width: '900px', maxWidth: '95%', height: '90vh', display: 'flex', flexDirection: 'column' }}>
+                            
+                            {/* HEADER (Bianco fisso) */}
+                            <div style={{ padding: '20px 40px', borderBottom: '1px solid #F0F0F2', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#FFFFFF' }}>
+                                <div>
+                                    <h3 style={{ fontSize: '22px', fontWeight: 900, margin: 0 }}>Clinical Setup Suite</h3>
+                                    <span style={{ fontSize: '12px', color: '#86868B', fontWeight: 700 }}>Pannello Analitico Avanzato</span>
+                                </div>
+                                <button onClick={() => setIsSetupOpen(false)} style={{ border: 'none', background: '#F2F2F7', width: '36px', height: '36px', borderRadius: '18px', cursor: 'pointer', fontWeight: 900, color: '#1D1D1F' }}>✕</button>
+                            </div>
+
+                            {/* NAV SCHEDE (Bianco/Grigio fisso) */}
+                            <div style={{ padding: '20px 40px 0 40px', background: '#FAFAFC' }}>
+                                <div className="setup-tab-nav">
+                                    {['antropometria', 'metabolismo & energia', 'partizione matriciale'].map(t => (
+                                        <button key={t} className={`setup-tab-btn ${setupTab === t ? 'active' : ''}`} onClick={() => setSetupTab(t)}>
+                                            {t.toUpperCase()}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+
+                            {/* CORPO SCHEDE (Sfondo dinamico che cambia colore in base agli errori) */}
+                            <div style={{ flex: 1, overflowY: 'auto', padding: '20px 40px 40px 40px', background: bgDynamicColor, transition: 'background 0.4s ease' }}>
+                                
+                                {/* TAB 1: ANTROPOMETRIA */}
+                                {setupTab === 'antropometria' && (
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '30px' }}>
+                                        {/* Input Dati */}
+                                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '15px', background: '#FFFFFF', padding: '20px', borderRadius: '24px', border: '1px solid #E5E5EA' }}>
+                                            <div className="t-input-floating"><label>Sesso</label><select value={calcData.sex} onChange={e => setCalcData({...calcData, sex: e.target.value})}><option value="M">M</option><option value="F">F</option></select></div>
+                                            <div className="t-input-floating"><label>Età</label><input type="number" value={calcData.age} onChange={e => setCalcData({...calcData, age: e.target.value})} /></div>
+                                            <div className="t-input-floating"><label>Peso (kg)</label><input type="number" value={calcData.weight} onChange={e => setCalcData({...calcData, weight: e.target.value})} /></div>
+                                            <div className="t-input-floating"><label>Altezza (cm)</label><input type="number" value={calcData.height} onChange={e => setCalcData({...calcData, height: e.target.value})} /></div>
+                                            <div className="t-input-floating"><label>Vita (cm)</label><input type="number" value={calcData.waist} onChange={e => setCalcData({...calcData, waist: e.target.value})} /></div>
+                                            <div className="t-input-floating"><label>Fianchi (cm)</label><input type="number" value={calcData.hip} onChange={e => setCalcData({...calcData, hip: e.target.value})} /></div>
+                                            <div className="t-input-floating"><label>Polso (cm)</label><input type="number" value={calcData.wrist} onChange={e => setCalcData({...calcData, wrist: e.target.value})} /></div>
+                                        </div>
+
+                                        {/* Smart Cards Valutazione */}
+                                        <div className="smart-card-grid">
+                                            <div className="smart-card">
+                                                <div className="smart-badge" style={{ background: bmiStatus.color }}>{bmiStatus.label}</div>
+                                                <span className="smart-title">Indice BMI</span>
+                                                <span className="smart-value">{bmi.toFixed(1)}</span>
+                                                <span className="smart-sub">Range Normale: 18.5 - 24.9</span>
+                                            </div>
+                                            <div className="smart-card">
+                                                <div className="smart-badge" style={{ background: whrStatus.color }}>{whrStatus.label}</div>
+                                                <span className="smart-title">Rapporto WHR</span>
+                                                <span className="smart-value">{whr.toFixed(2)}</span>
+                                                <span className="smart-sub">Indicatore Rischio Cardiovascolare</span>
+                                            </div>
+                                            <div className="smart-card">
+                                                <span className="smart-title">Peso Ideale / ABW</span>
+                                                <div style={{ display: 'flex', gap: '15px', alignItems: 'baseline', marginTop: '5px' }}>
+                                                    <span style={{ fontSize: '22px', fontWeight: 900, color: '#00C853' }}>{idealW.toFixed(1)} <span style={{fontSize:'12px', color:'#86868B'}}>kg (PI)</span></span>
+                                                    <span style={{ fontSize: '18px', fontWeight: 800, color: '#1D1D1F' }}>{adjustedW.toFixed(1)} <span style={{fontSize:'12px', color:'#86868B'}}>kg (ABW)</span></span>
+                                                </div>
+                                                <span className="smart-sub">Lorentz (PI) &bull; Aggiustato per Obesità (ABW)</span>
+                                            </div>
+                                            <div className="smart-card">
+                                                <span className="smart-title">Morfotipo (Grant)</span>
+                                                <span className="smart-value">{grant.toFixed(1)}</span>
+                                                <span className="smart-sub" style={{ color: '#007AFF', fontWeight: 800 }}>{getMorfotipo(grant, calcData.sex).toUpperCase()}</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* TAB 2: METABOLISMO ED ENERGIA */}
+                                {setupTab === 'metabolismo & energia' && (
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '25px' }}>
+                                        <div className="smart-card" style={{ padding: '25px' }}>
+                                            <span className="smart-title" style={{ marginBottom: '15px' }}>1. Peso di Riferimento per Calcolo RMR</span>
+                                            <div className="segmented-control">
+                                                <button className={`segmented-btn ${calcData.weightTarget === 'actual' ? 'active' : ''}`} onClick={() => setCalcData({...calcData, weightTarget: 'actual'})}>Attuale ({calcData.weight}kg)</button>
+                                                <button className={`segmented-btn ${calcData.weightTarget === 'ideal' ? 'active' : ''}`} onClick={() => setCalcData({...calcData, weightTarget: 'ideal'})}>Ideale ({idealW.toFixed(1)}kg)</button>
+                                                <button className={`segmented-btn ${calcData.weightTarget === 'adjusted' ? 'active' : ''}`} onClick={() => setCalcData({...calcData, weightTarget: 'adjusted'})}>Aggiustato ({adjustedW.toFixed(1)}kg)</button>
+                                            </div>
+                                        </div>
+
+                                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+                                            <div className="t-input-floating">
+                                                <label>Equazione Predittiva (RMR)</label>
+                                                <select value={calcData.formula} onChange={e => setCalcData({...calcData, formula: e.target.value})}>
+                                                    <option value="mifflin">Mifflin-St Jeor</option>
+                                                    <option value="harris">Harris-Benedict</option>
+                                                    <option value="katch">Katch-McArdle</option>
+                                                    <option value="schofield_18_29">Schofield 18-29</option>
+                                                    <option value="schofield_30_59">Schofield 30-59</option>
+                                                    <option value="schofield_60">Schofield &gt; 60</option>
+                                                </select>
+                                            </div>
+                                            <div className="t-input-floating">
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                                    <label>Livello Attività Fisica (LAF)</label>
+                                                    {/* TASTO SMART PER APRIRE IL CALCOLATORE 24H */}
+                                                    <button onClick={() => setIsLafModalOpen(true)} style={{ background: '#00C853', color: 'white', border: 'none', borderRadius: '6px', fontSize: '9px', fontWeight: 900, padding: '4px 8px', cursor: 'pointer' }}>
+                                                        CALCOLO PRO (24H)
+                                                    </button>
+                                                </div>
+                                                <select value={calcData.laf} onChange={e => setCalcData({...calcData, laf: parseFloat(e.target.value)})}>
+                                                    <option value="1.2">1.20 - Sedentario</option>
+                                                    <option value="1.45">1.45 - Leggero</option>
+                                                    <option value="1.65">1.65 - Moderato</option>
+                                                    <option value="1.85">1.85 - Intenso</option>
+                                                    <option value={calcData.laf} hidden>{calcData.laf} - Personalizzato</option>
+                                                </select>
+                                            </div>
+                                        </div>
+
+                                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginTop: '10px' }}>
+                                            <div className="smart-card" style={{ background: '#1D1D1F', color: 'white', borderColor: '#1D1D1F' }}>
+                                                <span className="smart-title" style={{ color: '#86868B' }}>Fabbisogno Energetico Totale (TDEE)</span>
+                                                <div style={{ fontSize: '42px', fontWeight: 900, color: '#00C853', marginTop: '10px' }}>
+                                                    {/* Il TDEE ora si aggiorna istantaneamente in base al peso scelto sopra */}
+                                                    {tdee} <span style={{fontSize: '16px', color: 'white'}}>KCAL / Die</span>
+                                                </div>
+                                                <span className="smart-sub" style={{ color: '#86868B' }}>
+                                                    Metabolismo Basale: {Math.round(rmr)} kcal (Peso: {calcData.weightTarget === 'ideal' ? idealW.toFixed(1) : calcData.weightTarget === 'adjusted' ? adjustedW.toFixed(1) : calcData.weight}kg)
+                                                </span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* TAB 3: PARTIZIONE MATRICIALE (PRO) */}
+                                {setupTab === 'partizione matriciale' && (
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '25px' }}>
+                                        
+                                        {/* Target Macro Globali */}
+                                        <div className="smart-card" style={{ padding: '20px 25px' }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
+                                                <span className="smart-title" style={{ margin: 0 }}>Distribuzione Macronutrienti (%)</span>
+                                                <span style={{ fontSize: '12px', fontWeight: 800, color: (calcData.macroTargets.c + calcData.macroTargets.p + calcData.macroTargets.f) === 100 ? '#00C853' : '#FF3B30' }}>
+                                                    TOTALE: {calcData.macroTargets.c + calcData.macroTargets.p + calcData.macroTargets.f}%
+                                                </span>
+                                            </div>
+                                            <div style={{ display: 'flex', gap: '20px' }}>
+                                                {['c', 'p', 'f'].map(m => (
+                                                    <div key={m} style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '10px', background: '#FAFAFC', padding: '10px 15px', borderRadius: '12px' }}>
+                                                        <span style={{ fontWeight: 800, color: m==='c'?'#1D1D1F':m==='p'?'#00C853':'#86868B', textTransform: 'uppercase' }}>{m}</span>
+                                                        <input type="number" className="matrix-input" value={calcData.macroTargets[m]} onChange={e => setCalcData({...calcData, macroTargets: {...calcData.macroTargets, [m]: Number(e.target.value)}})} />
+                                                        <span style={{ fontWeight: 800, color: '#86868B' }}>%</span>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+
+                                        {/* Matrice Partizione Pasti Dinamica */}
+                                        <div className="smart-card">
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                                                <span className="smart-title" style={{ margin: 0 }}>Matrice Intra-Pasto Dinamica</span>
+                                                <button onClick={addMatrixMeal} style={{ background: '#F2F2F7', color: '#1D1D1F', border: 'none', padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 800, cursor: 'pointer' }}>+ Aggiungi Pasto</button>
+                                            </div>
+
+                                            <table className="matrix-table">
+                                                <thead>
+                                                    <tr>
+                                                        <th>Nome Pasto</th>
+                                                        <th style={{ textAlign: 'center' }}>% Die</th>
+                                                        <th style={{ textAlign: 'center' }}>Kcal</th>
+                                                        <th style={{ textAlign: 'center' }}>C (g)</th>
+                                                        <th style={{ textAlign: 'center' }}>P (g)</th>
+                                                        <th style={{ textAlign: 'center' }}>F (g)</th>
+                                                        <th style={{ textAlign: 'center', width: '30px' }}></th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {calcData.distribution.map(meal => {
+                                                        const pct = meal.value / 100;
+                                                        return (
+                                                            <tr key={meal.id} className="laf-row">
+                                                                <td>
+                                                                    <input type="text" className="laf-input" value={meal.name} onChange={e => updateMatrixMeal(meal.id, 'name', e.target.value)} style={{ padding: '4px', margin: 0 }} />
+                                                                </td>
+                                                                <td style={{ textAlign: 'center' }}>
+                                                                    <input type="number" className="matrix-input" value={meal.value} onChange={e => updateMatrixMeal(meal.id, 'value', Number(e.target.value))} /> <span style={{fontSize:'10px', color:'#86868B'}}>%</span>
+                                                                </td>
+                                                                <td style={{ textAlign: 'center', color: '#00C853', fontWeight: 900 }}>{Math.round(tdee * pct)}</td>
+                                                                <td style={{ textAlign: 'center' }}>{Math.round(totalC_g * pct)}</td>
+                                                                <td style={{ textAlign: 'center' }}>{Math.round(totalP_g * pct)}</td>
+                                                                <td style={{ textAlign: 'center' }}>{Math.round(totalF_g * pct)}</td>
+                                                                <td style={{ textAlign: 'center' }}>
+                                                                    <button onClick={() => removeMatrixMeal(meal.id)} style={{ background: 'transparent', border: 'none', color: '#FF3B30', fontWeight: 900, cursor: 'pointer', padding: '5px' }}>✕</button>
+                                                                </td>
+                                                            </tr>
+                                                        )
+                                                    })}
+                                                </tbody>
+                                            </table>
+                                            
+                                            {/* Contatore in tempo reale */}
+                                            <div style={{ textAlign: 'right', marginTop: '15px', fontSize: '14px', fontWeight: 900, color: totalDist === 100 ? '#00C853' : '#FF3B30' }}>
+                                                SOMMA PASTI: {totalDist}%
+                                            </div>
+                                        </div>
+
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* FOOTER INTELLIGENTE */}
+                            <div style={{ padding: '20px 40px', borderTop: '1px solid #F0F0F2', background: '#FFFFFF', display: 'flex', justifyContent: 'flex-end', alignItems: 'center' }}>
+                                <button 
+                                    disabled={totalDist !== 100}
+                                    onClick={() => {
+                                        setTargets(prev => ({ 
+                                            ...prev, 
+                                            kcal: tdee, 
+                                            c: calcData.macroTargets.c, 
+                                            p: calcData.macroTargets.p, 
+                                            f: calcData.macroTargets.f 
+                                        }));
+                                        setIsSetupOpen(false);
+                                    }} 
+                                    style={{ 
+                                        background: totalDist === 100 ? '#00C853' : '#E5E5EA', 
+                                        color: totalDist === 100 ? 'white' : '#86868B', 
+                                        padding: '15px 45px', borderRadius: '14px', border: 'none', fontWeight: 900, 
+                                        cursor: totalDist === 100 ? 'pointer' : 'not-allowed', 
+                                        boxShadow: totalDist === 100 ? '0 8px 20px rgba(0,200,83,0.3)' : 'none',
+                                        transition: 'all 0.3s ease'
+                                    }}
+                                >
+                                    CRISTALLIZZA E APPLICA
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                );
+            })()}
 
             {/* --- MODALE DATABASE ALIMENTI --- */}
             {isDbOpen && (
@@ -887,6 +2253,103 @@ export const DietPlan = ({ patient }) => {
                             
                             <button style={{ color: '#FF3B30', background: 'transparent', border: 'none', fontSize: '13px', fontWeight: 700, cursor: 'pointer', textDecoration: 'underline' }} onClick={resetDatabase}>
                                 Ripristina Database di Default
+                            </button>
+                        </div>
+
+                        
+                    </div>
+                </div>
+            )}
+            {/* --- MODALE SMART CHART MAKER --- */}
+            {isSmartOpen && (
+                <div className="modal-backdrop">
+                    <div className="modal-window" style={{ maxWidth: '700px', height: 'auto' }}>
+                        
+                        <div style={{ padding: '25px 40px', borderBottom: '1px solid #F0F0F2', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div>
+                                <h3 style={{ fontSize: '22px', fontWeight: 800, margin: 0, color: '#1D1D1F' }}>Smart Report Maker</h3>
+                                <span style={{ fontSize: '12px', color: '#86868B', fontWeight: 600 }}>Crea grafici personalizzati per l'analisi clinica</span>
+                            </div>
+                            <button onClick={() => setIsSmartOpen(false)} style={{ border: 'none', background: 'transparent', fontSize: '20px', cursor: 'pointer', color: '#86868B', fontWeight: 800 }}>X</button>
+                        </div>
+                        
+                        <div style={{ padding: '40px', background: '#FAFAFC', display: 'flex', flexDirection: 'column', gap: '25px' }}>
+                            
+                            {/* PANNELLO DI CONTROLLO AVANZATO PLOTLY */}
+                            {/* PANNELLO DI CONTROLLO AVANZATO PLOTLY */}
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '20px' }}>
+                                
+                                <div>
+                                    <label className="t-input-floating" style={{ marginBottom: '8px' }}>Estensione Dati</label>
+                                    <select 
+                                        value={smartConfig.scope} 
+                                        onChange={e => setSmartConfig({...smartConfig, scope: e.target.value})}
+                                        style={{ width: '100%', padding: '12px', borderRadius: '8px', border: '1px solid #E5E5EA', fontSize: '14px', fontWeight: 600, outline: 'none', background: '#FFFFFF' }}>
+                                        <option value="activeDay">Solo Giorno Corrente (Pasti)</option>
+                                        <option value="allDays">Confronta Tutti i Giorni</option>
+                                    </select>
+                                </div>
+
+                                <div>
+                                    <label className="t-input-floating" style={{ marginBottom: '8px' }}>Tipo di Grafico</label>
+                                    <select 
+                                        value={smartConfig.type} 
+                                        onChange={e => setSmartConfig({...smartConfig, type: e.target.value})}
+                                        style={{ width: '100%', padding: '12px', borderRadius: '8px', border: '1px solid #E5E5EA', fontSize: '14px', fontWeight: 600, outline: 'none', background: '#FFFFFF' }}>
+                                        <option value="bar">Istogramma</option>
+                                        <option value="line">Linea di Tendenza</option>
+                                        <option value="pie">Torta Composizione</option>
+                                        <option value="mixed">Misto (Kcal vs Peso)</option>
+                                        <option value="radar">Radar (Equilibrio Macro)</option>
+                                        <option value="3d">Scatter 3D (Volumetrico)</option>
+                                    </select>
+                                </div>
+
+                                <div>
+                                    <label className="t-input-floating" style={{ marginBottom: '8px' }}>Metrica Principale</label>
+                                    <select 
+                                        value={smartConfig.metric} 
+                                        onChange={e => setSmartConfig({...smartConfig, metric: e.target.value})}
+                                        disabled={smartConfig.type === 'mixed' || smartConfig.type === '3d' || smartConfig.type === 'radar'}
+                                        style={{ width: '100%', padding: '12px', borderRadius: '8px', border: '1px solid #E5E5EA', fontSize: '14px', fontWeight: 600, outline: 'none', background: smartConfig.type === 'mixed' || smartConfig.type === '3d' || smartConfig.type === 'radar' ? '#F5F5F7' : '#FFFFFF', color: smartConfig.type === 'mixed' || smartConfig.type === '3d' || smartConfig.type === 'radar' ? '#86868B' : '#1D1D1F' }}>
+                                        <option value="kcal">Calorie Totali</option>
+                                        <option value="macro">Confronto Macro (P/C/F)</option>
+                                        <option value="p">Proteine (g)</option>
+                                        <option value="c">Carboidrati (g)</option>
+                                        <option value="f">Grassi (g)</option>
+                                        <option value="weight">Volume (g)</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div style={{ background: '#FFFFFF', padding: '40px', borderRadius: '16px', border: '1px dashed #C7C7CC', textAlign: 'center', color: '#86868B' }}>
+                                {/* Area segnaposto per il rendering futuro del grafico selezionato */}
+                                {/* IL CONTENITORE DEL GRAFICO PLOTLY */}
+                            <div style={{ background: '#FFFFFF', padding: '20px', borderRadius: '16px', border: '1px dashed #C7C7CC', height: '350px', position: 'relative' }}>
+                                {/* Questo div viene "riempito" dalla funzione useEffect qua sopra */}
+                                <div ref={plotRef} style={{ width: '100%', height: '100%' }}></div>
+                            </div>
+                            </div>
+
+                            <div>
+                                <label className="t-input-floating" style={{ marginBottom: '8px' }}>Note Cliniche e Commenti al Paziente</label>
+                                <textarea 
+                                    value={smartConfig.comment}
+                                    onChange={e => setSmartConfig({...smartConfig, comment: e.target.value})}
+                                    placeholder="Inserisci qui le tue osservazioni nutrizionali, variazioni consigliate o feedback sull'andamento..."
+                                    style={{ width: '100%', padding: '16px', borderRadius: '12px', border: '1px solid #E5E5EA', fontSize: '14px', outline: 'none', minHeight: '120px', fontFamily: 'inherit', resize: 'vertical' }}
+                                />
+                            </div>
+
+                        </div>
+
+                        <div style={{ padding: '20px 40px', borderTop: '1px solid #F0F0F2', background: '#FFFFFF', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <button style={{ background: 'transparent', color: '#86868B', border: 'none', fontWeight: 700, cursor: 'pointer' }} onClick={() => setSmartConfig({type: 'bar', dataSource: 'kcal', comment: ''})}>
+                                Resetta
+                            </button>
+                            {/* Nel footer del Modale Smart, sostituisci il bottone esistente con questo */}
+                            <button onClick={saveSmartReport} style={{ background: '#00C853', color: 'white', padding: '12px 35px', borderRadius: '12px', border: 'none', fontWeight: 700, cursor: 'pointer' }}>
+                                Salva
                             </button>
                         </div>
                     </div>
