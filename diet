@@ -104,28 +104,137 @@ const calculateIdealWeight = (sex, h) => {
 
 export const DietPlan = ({ patient }) => {
 
-    // --- GESTIONE DINAMICA PASTI (MATRICE) ---
+    
+
+   // --- MOTORE MATRICE (GLOBALE & DAILY) ---
+    const setMatrixState = (updater) => {
+        setCalcData(prev => {
+            if (prev.matrixMode === 'global') {
+                return { ...prev, ...updater(prev) };
+            } else {
+                const dayId = prev.activeMatrixDayId;
+                if (!dayId) return prev; // Sicurezza
+                
+                // Crea una VERA COPIA separata se il giorno non ha ancora una sua configurazione
+                const currentDaily = prev.dailyConfigs[dayId] || { 
+                    macroTargets: { ...prev.macroTargets }, 
+                    distribution: prev.distribution.map(d => ({...d})) 
+                };
+                
+                const updatedDaily = { ...currentDaily, ...updater(currentDaily) };
+                
+                return { 
+                    ...prev, 
+                    dailyConfigs: { ...prev.dailyConfigs, [dayId]: updatedDaily } 
+                };
+            }
+        });
+    };
+
+    
+    // --- MOTORE MATRICE (VERSIONE BLINDATA E DIRETTA) ---
+    
+    const updateMatrixMacro = (macro, val) => {
+        setCalcData(prev => {
+            const numVal = Number(val);
+            if (prev.matrixMode === 'global') {
+                return { ...prev, macroTargets: { ...prev.macroTargets, [macro]: numVal } };
+            }
+            const dayId = prev.activeMatrixDayId;
+            if (!dayId) return prev;
+            const daily = prev.dailyConfigs[dayId] || { macroTargets: {...prev.macroTargets}, distribution: prev.distribution.map(d=>({...d})) };
+            return { ...prev, dailyConfigs: { ...prev.dailyConfigs, [dayId]: { ...daily, macroTargets: { ...daily.macroTargets, [macro]: numVal } } } };
+        });
+    };
+
     const addMatrixMeal = () => {
-        setCalcData(prev => ({
-            ...prev,
-            distribution: [...prev.distribution, { id: Date.now(), name: 'Nuovo Pasto', value: 0 }]
-        }));
+        setCalcData(prev => {
+            const newMeal = { id: Date.now() + Math.random(), name: 'Nuovo Pasto', value: 0 };
+            if (prev.matrixMode === 'global') {
+                return { ...prev, distribution: [...prev.distribution, newMeal] };
+            }
+            const dayId = prev.activeMatrixDayId;
+            if (!dayId) return prev;
+            const daily = prev.dailyConfigs[dayId] || { macroTargets: {...prev.macroTargets}, distribution: prev.distribution.map(d=>({...d})) };
+            return { ...prev, dailyConfigs: { ...prev.dailyConfigs, [dayId]: { ...daily, distribution: [...daily.distribution, newMeal] } } };
+        });
     };
 
     const removeMatrixMeal = (id) => {
-        setCalcData(prev => ({
-            ...prev,
-            distribution: prev.distribution.filter(m => m.id !== id)
-        }));
+        setCalcData(prev => {
+            if (prev.matrixMode === 'global') {
+                return { ...prev, distribution: prev.distribution.filter(m => m.id !== id) };
+            }
+            const dayId = prev.activeMatrixDayId;
+            if (!dayId) return prev;
+            const daily = prev.dailyConfigs[dayId] || { macroTargets: {...prev.macroTargets}, distribution: prev.distribution.map(d=>({...d})) };
+            return { ...prev, dailyConfigs: { ...prev.dailyConfigs, [dayId]: { ...daily, distribution: daily.distribution.filter(m => m.id !== id) } } };
+        });
     };
 
     const updateMatrixMeal = (id, field, val) => {
-        setCalcData(prev => ({
-            ...prev,
-            distribution: prev.distribution.map(m => m.id === id ? { ...m, [field]: val } : m)
-        }));
+        setCalcData(prev => {
+            if (prev.matrixMode === 'global') {
+                return { ...prev, distribution: prev.distribution.map(m => m.id === id ? { ...m, [field]: val } : m) };
+            }
+            const dayId = prev.activeMatrixDayId;
+            if (!dayId) return prev;
+            const daily = prev.dailyConfigs[dayId] || { macroTargets: {...prev.macroTargets}, distribution: prev.distribution.map(d=>({...d})) };
+            return { ...prev, dailyConfigs: { ...prev.dailyConfigs, [dayId]: { ...daily, distribution: daily.distribution.map(m => m.id === id ? { ...m, [field]: val } : m) } } };
+        });
     };
+
+    const duplicateMatrixMeal = (id) => {
+        setCalcData(prev => {
+            if (prev.matrixMode === 'global') {
+                const meal = prev.distribution.find(m => m.id === id);
+                if (!meal) return prev;
+                const newDist = [...prev.distribution];
+                newDist.splice(prev.distribution.findIndex(m => m.id === id) + 1, 0, { ...meal, id: Date.now() + Math.random(), name: `${meal.name} (Copia)` });
+                return { ...prev, distribution: newDist };
+            }
+            const dayId = prev.activeMatrixDayId;
+            if (!dayId) return prev;
+            const daily = prev.dailyConfigs[dayId] || { macroTargets: {...prev.macroTargets}, distribution: prev.distribution.map(d=>({...d})) };
+            const meal = daily.distribution.find(m => m.id === id);
+            if (!meal) return prev;
+            const newDist = [...daily.distribution];
+            newDist.splice(daily.distribution.findIndex(m => m.id === id) + 1, 0, { ...meal, id: Date.now() + Math.random(), name: `${meal.name} (Copia)` });
+            return { ...prev, dailyConfigs: { ...prev.dailyConfigs, [dayId]: { ...daily, distribution: newDist } } };
+        });
+    };
+
+    const handleMatrixDrop = (e, targetId) => {
+        e.preventDefault(); e.stopPropagation();
+        if (!matrixDragId || matrixDragId === targetId) { setMatrixDragId(null); setMatrixDragOverId(null); return; }
+        setCalcData(prev => {
+            if (prev.matrixMode === 'global') {
+                const newDist = [...prev.distribution];
+                const dragIdx = newDist.findIndex(m => m.id === matrixDragId);
+                const dropIdx = newDist.findIndex(m => m.id === targetId);
+                if (dragIdx === -1 || dropIdx === -1) return prev;
+                const [draggedItem] = newDist.splice(dragIdx, 1);
+                newDist.splice(dropIdx, 0, draggedItem);
+                return { ...prev, distribution: newDist };
+            }
+            const dayId = prev.activeMatrixDayId;
+            if (!dayId) return prev;
+            const daily = prev.dailyConfigs[dayId] || { macroTargets: {...prev.macroTargets}, distribution: prev.distribution.map(d=>({...d})) };
+            const newDist = [...daily.distribution];
+            const dragIdx = newDist.findIndex(m => m.id === matrixDragId);
+            const dropIdx = newDist.findIndex(m => m.id === targetId);
+            if (dragIdx === -1 || dropIdx === -1) return prev;
+            const [draggedItem] = newDist.splice(dragIdx, 1);
+            newDist.splice(dropIdx, 0, draggedItem);
+            return { ...prev, dailyConfigs: { ...prev.dailyConfigs, [dayId]: { ...daily, distribution: newDist } } };
+        });
+        setMatrixDragId(null); setMatrixDragOverId(null);
+    };
+
+
     const [setupTab, setSetupTab] = useState('antropometria');
+
+    
 
     // --- STATI PER IL CALCOLATORE LAF A 24 ORE ---
     const [isLafModalOpen, setIsLafModalOpen] = useState(false);
@@ -183,7 +292,10 @@ export const DietPlan = ({ patient }) => {
             { id: 3, name: 'Pranzo', value: 35 },
             { id: 4, name: 'Spuntino Pomeriggio', value: 10 },
             { id: 5, name: 'Cena', value: 30 }
-        ]
+        ],
+        matrixMode: 'global', // 'global' | 'daily'
+        activeMatrixDayId: null,
+        dailyConfigs: {}
     });
 
     const [analysisTargetId, setAnalysisTargetId] = useState('all'); // 'all' o l'ID del giorno
@@ -220,7 +332,7 @@ export const DietPlan = ({ patient }) => {
     // Target Nutrizionali Globali (Kcal totali e percentuali dei macronutrienti)
     const [targets, setTargets] = useState(() => {
         const stored = localStorage.getItem('diet_targets');
-        return stored ? JSON.parse(stored) : { kcal: 2000, p: 30, c: 40, f: 30 };
+        return stored ? JSON.parse(stored) : { kcal: 0, p: 0, c: 0, f: 0, isConfigured: false };
     });
 
     // Ref per Import JSON del database
@@ -255,18 +367,19 @@ export const DietPlan = ({ patient }) => {
 
     // --- GESTIONE GIORNI (Equivalente alla gestione Settimane nel TrainingPlan) ---
 
-    // Aggiunge un nuovo Giorno con tre pasti di default vuoti
+    // Aggiunge un nuovo Giorno sincronizzato con la Matrice Pasti del Setup
     const addNewDay = () => {
         setDietDays(prev => {
             const newDayId = genId();
             return [...prev, {
                 id: newDayId,
                 title: `Giorno ${prev.length + 1}`,
-                meals: [
-                    { id: genId(), title: 'Colazione', items: [] },
-                    { id: genId(), title: 'Pranzo', items: [] },
-                    { id: genId(), title: 'Cena', items: [] }
-                ]
+                // Legge dinamicamente dalla Matrice (calcData.distribution)
+                meals: calcData.distribution.map(m => ({ 
+                    id: genId(), 
+                    title: m.name, 
+                    items: [] 
+                }))
             }];
         });
     };
@@ -406,6 +519,8 @@ export const DietPlan = ({ patient }) => {
 
     const [draggedItem, setDraggedItem] = useState(null);
     const [dragOverId, setDragOverId] = useState(null);
+    const [matrixDragId, setMatrixDragId] = useState(null);
+    const [matrixDragOverId, setMatrixDragOverId] = useState(null);
 
     const handleDragStart = (e, type, itemData) => {
         e.stopPropagation();
@@ -1318,6 +1433,7 @@ export const DietPlan = ({ patient }) => {
                 
 
                 {/* 2. INDICE DRAG & DROP DEI GIORNI E PASTI */}
+                {/* 2. INDICE DRAG & DROP DEI GIORNI E LISTA PASTI SINCRONIZZATA */}
                 <ul className="t-nav-list" style={{ paddingBottom: '20px' }}>
                     {dietDays.map((day, dIndex) => (
                         <div key={day.id} 
@@ -1330,7 +1446,7 @@ export const DietPlan = ({ patient }) => {
                             className={dragOverId === day.id ? 'drag-over-active' : ''}
                             style={{ marginBottom: '10px', borderRadius: '12px', transition: '0.2s' }}>
                             
-                            {/* LIVELLO 1: IL GIORNO (Ex Settimana) */}
+                            {/* LIVELLO 1: IL GIORNO (Spostabile e Duplicabile) */}
                             <li className="premium-item" style={{ cursor: 'grab', color: '#1D1D1F' }}>
                                 <div style={{ display: 'flex', alignItems: 'center', width: '100%' }}>
                                     <span style={{ fontWeight: 800, display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -1344,48 +1460,42 @@ export const DietPlan = ({ patient }) => {
                                 </div>
                             </li>
 
-                            {/* LIVELLO 2: I PASTI DEL GIORNO (Ex Giorni della Settimana) */}
+                            {/* LIVELLO 2: I PASTI DEL GIORNO (Sola Lettura / Navigazione) */}
                             <div className="premium-subitem">
                                 {day.meals && day.meals.map((meal, mIndex) => {
                                     const isSelected = activeMealInfo?.mealId === meal.id;
+                                    const foodCount = meal.items ? meal.items.length : 0; // Conta quanti alimenti ci sono
 
                                     return (
-                                        <div key={meal.id}
-                                            draggable 
-                                            onDragStart={(e) => handleDragStart(e, 'meal', { dayId: day.id, mealId: meal.id })}
-                                            onDragEnd={handleDragEnd}
-                                            onDragOver={(e) => handleDragOver(e, 'meal', meal.id)}
-                                            onDragLeave={() => setDragOverId(null)}
-                                            onDrop={(e) => { handleDrop(e, 'meal', { dayId: day.id, mealId: meal.id }); setDragOverId(null); }}
-                                            className={dragOverId === meal.id ? 'drag-over-active' : ''}
-                                            style={{ borderRadius: '8px', transition: '0.2s', marginBottom: '2px' }}>
+                                        <div key={meal.id} style={{ borderRadius: '8px', transition: '0.2s', marginBottom: '2px' }}>
                                             
                                             <li className={`premium-item ${isSelected ? 'active-meal' : ''}`}
-                                                style={{ padding: '8px 10px', fontSize: '13px', cursor: 'pointer' }} 
+                                                style={{ padding: '8px 10px', fontSize: '13px', cursor: 'pointer', border: 'none' }} 
                                                 onClick={() => setActiveMealInfo({ dayId: day.id, mealId: meal.id })}>
                                                 
-                                                <div style={{ display: 'flex', alignItems: 'center', width: '100%' }}>
-                                                    <span style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: isSelected ? 800 : 600 }}>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
+                                                    <span style={{ fontWeight: isSelected ? 800 : 600 }}>
                                                         {meal.title || `Pasto ${mIndex + 1}`}
                                                     </span>
                                                     
-                                                    {/* MENU HOVER A DESTRA PER IL PASTO */}
-                                                    <div className="hover-actions">
-                                                        <span className="mini-action" onClick={(e) => { e.stopPropagation(); duplicateMeal(day.id, meal.id); }}>Copia</span>
-                                                        <span className="mini-action del" onClick={(e) => { e.stopPropagation(); removeMeal(day.id, meal.id); }}>Del</span>
-                                                    </div>
+                                                    {/* BADGE: Mostra il numero di alimenti inseriti */}
+                                                    {foodCount > 0 && (
+                                                        <span style={{ 
+                                                            fontSize: '10px', 
+                                                            background: isSelected ? '#00C853' : '#E5E5EA', 
+                                                            color: isSelected ? 'white' : '#86868B', 
+                                                            padding: '2px 6px', 
+                                                            borderRadius: '10px', 
+                                                            fontWeight: 800 
+                                                        }}>
+                                                            {foodCount} cibi
+                                                        </span>
+                                                    )}
                                                 </div>
                                             </li>
                                         </div>
                                     );
                                 })}
-                                
-                                {/* BOTTONE "AGGIUNGI PASTO" ALLA FINE DEL GIORNO */}
-                                <div 
-                                    onClick={() => addMeal(day.id)}
-                                    style={{ padding: '6px 10px', fontSize: '12px', color: '#00C853', cursor: 'pointer', fontWeight: 700, marginTop: '4px' }}>
-                                    + Aggiungi Pasto
-                                </div>
                             </div>
                         </div>
                     ))}
@@ -1408,261 +1518,250 @@ export const DietPlan = ({ patient }) => {
             </nav>
 
 {/* --- AREA CENTRALE (DASHBOARD E STAMPA) --- */}
-            {/* --- AREA CENTRALE (DASHBOARD ANALITICA) --- */}
             <main className="t-main-content">
-    <div className="t-container-wrapper">
-        
-        {/* 1. INTESTAZIONE CLIENTE */}
-        <div className="t-client-header-card">
-            <div className="t-input-floating">
-                <label>Cliente</label>
-                <input type="text" defaultValue={patient ? `${patient.nome} ${patient.cognome}` : ''} placeholder="Nome Cognome"/>
-            </div>
-            <div className="t-input-floating">
-                <label>Data Inizio</label>
-                <input type="date" defaultValue={new Date().toISOString().split('T')[0]}/>
-            </div>
-            <div className="t-input-floating">
-                <label>Target Kcal</label>
-                <div style={{ padding: '12px 16px', fontSize: '18px', fontWeight: 800, color: '#00C853' }}>
-                    {targets.kcal} kcal
-                </div>
-            </div>
-        </div>
-
-        {/* 2. DASHBOARD ANALITICA (Solo se c'è un giorno attivo) */}
-        {/* --- MODULO ANALISI TECNICA CON LEGENDE --- */}
-        <section className="no-print" style={{ marginBottom: '40px' }}>
-            
-            <div className="analysis-nav">
-                <div 
-                    className={`analysis-chip ${analysisTargetId === 'all' ? 'active' : ''}`}
-                    onClick={() => setAnalysisTargetId('all')}
-                >
-                    Piano Completo
-                </div>
-                {dietDays.map((day, idx) => (
-                    <div 
-                        key={day.id}
-                        className={`analysis-chip ${analysisTargetId === day.id ? 'active' : ''}`}
-                        onClick={() => setAnalysisTargetId(day.id)}
-                    >
-                        G{idx + 1}
-                    </div>
-                ))}
-            </div>
-
-            {(() => {
-                let stats = [];
-                let totals = { kcal: 0, p: 0, c: 0, f: 0 };
-                const isAll = analysisTargetId === 'all';
-                
-                if (isAll) {
-                    stats = dietDays.map((d, i) => ({
-                        sigla: `G${i + 1}`,
-                        totals: calculateTotals(d.meals.flatMap(m => m.items))
-                    }));
-                } else {
-                    const selectedDay = dietDays.find(d => d.id === analysisTargetId);
-                    if (!selectedDay) return null;
-                    stats = selectedDay.meals.map((m, i) => ({
-                        sigla: `P${i + 1}`,
-                        totals: calculateTotals(m.items)
-                    }));
-                }
-
-                totals = stats.reduce((acc, curr) => ({
-                    kcal: acc.kcal + curr.totals.kcal, 
-                    p: acc.p + curr.totals.p, 
-                    c: acc.c + curr.totals.c, 
-                    f: acc.f + curr.totals.f
-                }), { kcal: 0, p: 0, c: 0, f: 0 });
-
-                const maxKcal = Math.max(...stats.map(s => s.totals.kcal), 1);
-                const totalMacro = (totals.p + totals.c + totals.f) || 1;
-
-                return (
-                    <div className="dashboard-grid">
-                        
-                        {/* 1. Torta Composizione con Legenda */}
-                        <div className="chart-card">
-                            <span className="scope-indicator">{isAll ? 'PIANO SETTIMANALE' : 'DETTAGLIO GIORNO'}</span>
-                            <div className="chart-title">Macro Totali</div>
-                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: 1, justifyContent: 'center' }}>
-                                <div className="pie-chart" style={{ 
-                                    background: `conic-gradient(#00C853 ${(totals.p/totalMacro)*100}%, #1D1D1F 0 ${((totals.p+totals.c)/totalMacro)*100}%, #86868B 0 100%)`,
-                                    width: '100px', height: '100px' 
-                                }}>
-                                    <div className="pie-hole" style={{ width: '70px', height: '70px' }}>
-                                        <span style={{ fontSize: '18px', fontWeight: 900 }}>{Math.round(totals.kcal)}</span>
-                                        <span style={{ fontSize: '8px', fontWeight: 800, color: '#86868B' }}>KCAL</span>
+                <div className="t-container-wrapper">
+                    
+                    {/* SE IL SETUP NON È STATO COMPILATO -> MOSTRA BLOCCO */}
+                    {!targets.isConfigured ? (
+                        <div style={{ width: '100%', minHeight: '60vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#86868B', background: '#FFFFFF', borderRadius: '32px', border: '2px dashed #E5E5EA', marginTop: '20px' }}>
+                            <div style={{ background: '#F9F9FB', padding: '24px', borderRadius: '24px', marginBottom: '25px', border: '1px solid #E5E5EA' }}>
+                                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#00C853" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+                                    <polyline points="9 12 11 14 15 10"></polyline>
+                                </svg>
+                            </div>
+                            <h3 style={{ fontSize: '24px', fontWeight: 900, color: '#1D1D1F', marginBottom: '12px' }}>Setup Obiettivi Richiesto</h3>
+                            <p style={{ fontSize: '14px', fontWeight: 600, maxWidth: '420px', textAlign: 'center', lineHeight: '1.6', marginBottom: '35px' }}>
+                                Per sbloccare l'area di pianificazione e sincronizzare la sidebar, configura prima i parametri clinici, il metabolismo e la matrice dei pasti.
+                            </p>
+                            <button onClick={() => setIsSetupOpen(true)} style={{ background: '#00C853', color: 'white', border: 'none', padding: '16px 36px', borderRadius: '16px', fontSize: '15px', fontWeight: 800, cursor: 'pointer', boxShadow: '0 8px 24px rgba(0,200,83,0.25)', transition: 'transform 0.2s' }}>
+                                Inizia Configurazione
+                            </button>
+                        </div>
+                    ) : (
+                        /* SE IL SETUP E' COMPLETATO -> MOSTRA LA DASHBOARD REALE */
+                        <>
+                            {/* 1. INTESTAZIONE CLIENTE */}
+                            <div className="t-client-header-card">
+                                <div className="t-input-floating">
+                                    <label>Cliente</label>
+                                    <input type="text" defaultValue={patient ? `${patient.nome} ${patient.cognome}` : ''} placeholder="Nome Cognome"/>
+                                </div>
+                                <div className="t-input-floating">
+                                    <label>Data Inizio</label>
+                                    <input type="date" defaultValue={new Date().toISOString().split('T')[0]}/>
+                                </div>
+                                <div className="t-input-floating">
+                                    <label>Target Kcal</label>
+                                    <div style={{ padding: '12px 16px', fontSize: '18px', fontWeight: 800, color: '#00C853' }}>
+                                        {targets.kcal} kcal
                                     </div>
                                 </div>
-                                <div className="chart-legend">
-                                    <div className="legend-item"><div className="legend-dot" style={{background:'#1D1D1F'}}></div> CAR {Math.round((totals.c/totalMacro)*100)}%</div>
-                                    <div className="legend-item"><div className="legend-dot" style={{background:'#00C853'}}></div> PRO {Math.round((totals.p/totalMacro)*100)}%</div>
-                                    <div className="legend-item"><div className="legend-dot" style={{background:'#86868B'}}></div> FAT {Math.round((totals.f/totalMacro)*100)}%</div>
-                                </div>
                             </div>
-                        </div>
 
-                        {/* 2. Istogramma Calorie con Valori Esposti */}
-                        <div className="chart-card">
-                            <span className="scope-indicator">ANDAMENTO ENERGETICO</span>
-                            <div className="chart-title">Kcal per {isAll ? 'Giorno' : 'Pasto'}</div>
-                            <div className="bar-container" style={{ paddingBottom: '10px' }}>
-                                {stats.map((s, i) => (
-                                    <div key={i} className="bar-col">
-                                        <div className="bar-value-top">{Math.round(s.totals.kcal)}</div>
-                                        <div className="bar-fill" style={{ 
-                                            height: `${(s.totals.kcal / maxKcal) * 75}%`, 
-                                            background: '#1D1D1F', borderRadius: '4px' 
-                                        }}></div>
-                                        <div className="bar-label-sigla">{s.sigla}</div>
+                            {/* 2. DASHBOARD ANALITICA */}
+                            <section className="no-print" style={{ marginBottom: '40px' }}>
+                                <div className="analysis-nav">
+                                    <div className={`analysis-chip ${analysisTargetId === 'all' ? 'active' : ''}`} onClick={() => setAnalysisTargetId('all')}>
+                                        Piano Completo
                                     </div>
-                                ))}
-                            </div>
-                            <div className="chart-legend">
-                                <span style={{fontSize: '9px', color: '#86868B', fontWeight: 800}}>{isAll ? 'G = GIORNO' : 'P = PASTO'}</span>
-                            </div>
-                        </div>
+                                    {dietDays.map((day, idx) => (
+                                        <div key={day.id} className={`analysis-chip ${analysisTargetId === day.id ? 'active' : ''}`} onClick={() => setAnalysisTargetId(day.id)}>
+                                            G{idx + 1}
+                                        </div>
+                                    ))}
+                                </div>
 
-                        {/* 3. Bilanciamento Macro con Legenda Colori */}
-                        <div className="chart-card">
-                            <span className="scope-indicator">SCOMPOSIZIONE INTERNA</span>
-                            <div className="chart-title">Rapporto Nutrienti</div>
-                            <div className="bar-container">
-                                {stats.map((s, i) => {
-                                    const mTotal = (s.totals.p + s.totals.c + s.totals.f) || 1;
+                                {(() => {
+                                    let stats = [];
+                                    let totals = { kcal: 0, p: 0, c: 0, f: 0 };
+                                    const isAll = analysisTargetId === 'all';
+                                    
+                                    if (isAll) {
+                                        stats = dietDays.map((d, i) => ({
+                                            sigla: `G${i + 1}`,
+                                            totals: calculateTotals(d.meals.flatMap(m => m.items))
+                                        }));
+                                    } else {
+                                        const selectedDay = dietDays.find(d => d.id === analysisTargetId);
+                                        if (!selectedDay) return null;
+                                        stats = selectedDay.meals.map((m, i) => ({
+                                            sigla: `P${i + 1}`,
+                                            totals: calculateTotals(m.items)
+                                        }));
+                                    }
+
+                                    totals = stats.reduce((acc, curr) => ({
+                                        kcal: acc.kcal + curr.totals.kcal, p: acc.p + curr.totals.p, c: acc.c + curr.totals.c, f: acc.f + curr.totals.f
+                                    }), { kcal: 0, p: 0, c: 0, f: 0 });
+
+                                    const maxKcal = Math.max(...stats.map(s => s.totals.kcal), 1);
+                                    const totalMacro = (totals.p + totals.c + totals.f) || 1;
+
                                     return (
-                                        <div key={i} className="bar-col" style={{ width: '100%' }}>
-                                            <div style={{ display: 'flex', flexDirection: 'column', height: '100%', width: '16px', borderRadius: '4px', overflow: 'hidden' }}>
-                                                <div style={{ height: `${(s.totals.p / mTotal) * 100}%`, background: '#00C853' }} title={`Pro: ${s.totals.p.toFixed(1)}g`}></div>
-                                                <div style={{ height: `${(s.totals.c / mTotal) * 100}%`, background: '#1D1D1F' }} title={`Car: ${s.totals.c.toFixed(1)}g`}></div>
-                                                <div style={{ height: `${(s.totals.f / mTotal) * 100}%`, background: '#86868B' }} title={`Fat: ${s.totals.f.toFixed(1)}g`}></div>
+                                        <div className="dashboard-grid">
+                                            {/* Torta Composizione con Legenda */}
+                                            <div className="chart-card">
+                                                <span className="scope-indicator">{isAll ? 'PIANO SETTIMANALE' : 'DETTAGLIO GIORNO'}</span>
+                                                <div className="chart-title">Macro Totali</div>
+                                                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: 1, justifyContent: 'center' }}>
+                                                    <div className="pie-chart" style={{ background: `conic-gradient(#00C853 ${(totals.p/totalMacro)*100}%, #1D1D1F 0 ${((totals.p+totals.c)/totalMacro)*100}%, #86868B 0 100%)`, width: '100px', height: '100px' }}>
+                                                        <div className="pie-hole" style={{ width: '70px', height: '70px' }}>
+                                                            <span style={{ fontSize: '18px', fontWeight: 900 }}>{Math.round(totals.kcal)}</span>
+                                                            <span style={{ fontSize: '8px', fontWeight: 800, color: '#86868B' }}>KCAL</span>
+                                                        </div>
+                                                    </div>
+                                                    <div className="chart-legend">
+                                                        <div className="legend-item"><div className="legend-dot" style={{background:'#1D1D1F'}}></div> CAR {Math.round((totals.c/totalMacro)*100)}%</div>
+                                                        <div className="legend-item"><div className="legend-dot" style={{background:'#00C853'}}></div> PRO {Math.round((totals.p/totalMacro)*100)}%</div>
+                                                        <div className="legend-item"><div className="legend-dot" style={{background:'#86868B'}}></div> FAT {Math.round((totals.f/totalMacro)*100)}%</div>
+                                                    </div>
+                                                </div>
                                             </div>
-                                            <div className="bar-label-sigla">{s.sigla}</div>
+
+                                            {/* Istogramma Calorie con Valori Esposti */}
+                                            <div className="chart-card">
+                                                <span className="scope-indicator">ANDAMENTO ENERGETICO</span>
+                                                <div className="chart-title">Kcal per {isAll ? 'Giorno' : 'Pasto'}</div>
+                                                <div className="bar-container" style={{ paddingBottom: '10px' }}>
+                                                    {stats.map((s, i) => (
+                                                        <div key={i} className="bar-col">
+                                                            <div className="bar-value-top">{Math.round(s.totals.kcal)}</div>
+                                                            <div className="bar-fill" style={{ height: `${(s.totals.kcal / maxKcal) * 75}%`, background: '#1D1D1F', borderRadius: '4px' }}></div>
+                                                            <div className="bar-label-sigla">{s.sigla}</div>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                                <div className="chart-legend"><span style={{fontSize: '9px', color: '#86868B', fontWeight: 800}}>{isAll ? 'G = GIORNO' : 'P = PASTO'}</span></div>
+                                            </div>
+
+                                            {/* Bilanciamento Macro con Legenda Colori */}
+                                            <div className="chart-card">
+                                                <span className="scope-indicator">SCOMPOSIZIONE INTERNA</span>
+                                                <div className="chart-title">Rapporto Nutrienti</div>
+                                                <div className="bar-container">
+                                                    {stats.map((s, i) => {
+                                                        const mTotal = (s.totals.p + s.totals.c + s.totals.f) || 1;
+                                                        return (
+                                                            <div key={i} className="bar-col" style={{ width: '100%' }}>
+                                                                <div style={{ display: 'flex', flexDirection: 'column', height: '100%', width: '16px', borderRadius: '4px', overflow: 'hidden' }}>
+                                                                    <div style={{ height: `${(s.totals.p / mTotal) * 100}%`, background: '#00C853' }} title={`Pro: ${s.totals.p.toFixed(1)}g`}></div>
+                                                                    <div style={{ height: `${(s.totals.c / mTotal) * 100}%`, background: '#1D1D1F' }} title={`Car: ${s.totals.c.toFixed(1)}g`}></div>
+                                                                    <div style={{ height: `${(s.totals.f / mTotal) * 100}%`, background: '#86868B' }} title={`Fat: ${s.totals.f.toFixed(1)}g`}></div>
+                                                                </div>
+                                                                <div className="bar-label-sigla">{s.sigla}</div>
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                                <div className="chart-legend">
+                                                    <div className="legend-item"><div className="legend-dot" style={{background:'#1D1D1F'}}></div> C</div>
+                                                    <div className="legend-item"><div className="legend-dot" style={{background:'#00C853'}}></div> P</div>
+                                                    <div className="legend-item"><div className="legend-dot" style={{background:'#86868B'}}></div> F</div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    );
+                                })()}
+                            </section>
+
+                            {/* 3. PANORAMICA DEL PIANO ALIMENTARE (Tutti i giorni) */}
+                            <div style={{ marginTop: '40px', marginBottom: '20px', borderBottom: '2px solid #E5E5EA', paddingBottom: '10px' }}>
+                                <span style={{ fontSize: '22px', fontWeight: 800, color: '#1D1D1F' }}>Panoramica del Piano Alimentare</span>
+                            </div>
+
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                                {dietDays.map((day) => {
+                                    const currentDayMeals = day.meals || [];
+                                    const currentMealStats = currentDayMeals.map(m => ({ 
+                                        title: m.title, totals: calculateTotals(m.items), id: m.id 
+                                    }));
+                                    
+                                    const currentDayTotals = currentMealStats.reduce((acc, curr) => ({
+                                        kcal: acc.kcal + curr.totals.kcal, p: acc.p + curr.totals.p, c: acc.c + curr.totals.c, f: acc.f + curr.totals.f
+                                    }), { kcal: 0, p: 0, c: 0, f: 0 });
+
+                                    return (
+                                        <div key={day.id} id={day.id} className="day-summary-card">
+                                            <div className="day-summary-header">
+                                                <input 
+                                                    type="text" className="day-title-input" value={day.title} 
+                                                    onChange={e => updateDayTitle(day.id, e.target.value)} placeholder="Nome Giornata..."
+                                                />
+                                                <div className="day-macro-summary no-print">
+                                                    <span style={{ color: '#1D1D1F' }}>{currentDayTotals.kcal.toFixed(0)} kcal</span>
+                                                    <span style={{ color: '#1D1D1F' }}>C: {currentDayTotals.c.toFixed(0)}g</span>
+                                                    <span style={{ color: '#00C853' }}>P: {currentDayTotals.p.toFixed(0)}g</span>
+                                                    <span style={{ color: '#86868B' }}>F: {currentDayTotals.f.toFixed(0)}g</span>
+                                                </div>
+                                            </div>
+
+                                            <div className="meal-rect-grid">
+                                                {currentMealStats.map((m) => (
+                                                    <div key={m.id} className="meal-rect-card" onClick={() => setActiveMealInfo({ dayId: day.id, mealId: m.id })}>
+                                                        <input 
+                                                            type="text" className="meal-title-input" value={m.title} 
+                                                            onClick={(e) => e.stopPropagation()} onChange={e => updateMealTitle(day.id, m.id, e.target.value)} 
+                                                        />
+                                                        <div className="meal-rect-stats">
+                                                            <div className="meal-macro-col">
+                                                                <span><span style={{ color: '#1D1D1F' }}>C:</span> {m.totals.c.toFixed(0)}g</span>
+                                                                <span><span style={{ color: '#00C853' }}>P:</span> {m.totals.p.toFixed(0)}g</span>
+                                                                <span><span style={{ color: '#86868B' }}>F:</span> {m.totals.f.toFixed(0)}g</span>
+                                                            </div>
+                                                            <div style={{ fontSize: '20px', fontWeight: 800, color: '#00C853', lineHeight: '1' }}>
+                                                                {m.totals.kcal.toFixed(0)}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
                                         </div>
                                     );
                                 })}
                             </div>
-                            <div className="chart-legend">
-                                <div className="legend-item"><div className="legend-dot" style={{background:'#1D1D1F'}}></div> C</div>
-                                <div className="legend-item"><div className="legend-dot" style={{background:'#00C853'}}></div> P</div>
-                                <div className="legend-item"><div className="legend-dot" style={{background:'#86868B'}}></div> F</div>
-                            </div>
-                        </div>
-                    </div>
-                );
-            })()}
-        </section>
 
-        {/* 3. PANORAMICA DEL PIANO ALIMENTARE (Tutti i giorni) */}
-        <div style={{ marginTop: '40px', marginBottom: '20px', borderBottom: '2px solid #E5E5EA', paddingBottom: '10px' }}>
-            <span style={{ fontSize: '22px', fontWeight: 800, color: '#1D1D1F' }}>Panoramica del Piano Alimentare</span>
-        </div>
+                            {/* 4. ARCHIVIO REPORT CLINICI */}
+                            {savedReports.length > 0 && (
+                                <div className="saved-reports-section" style={{ marginTop: '50px', paddingBottom: '60px' }}>
+                                    <div style={{ marginBottom: '25px', borderBottom: '2px solid #E5E5EA', paddingBottom: '10px' }}>
+                                        <span style={{ fontSize: '22px', fontWeight: 800, color: '#1D1D1F' }}>Archivio Report Clinici</span>
+                                    </div>
+                                    
+                                    <div className="reports-grid">
+                                        {savedReports.map(report => {
+                                            const hasComment = report.config.comment && report.config.comment.trim() !== '';
+                                            return (
+                                                <div key={report.id} className={`report-card ${hasComment ? 'double' : ''}`}>
+                                                    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+                                                        <div className="report-card-header">
+                                                            <div>
+                                                                <h4 className="report-card-title">{report.dayTitle}</h4>
+                                                                <span className="report-card-subtitle">
+                                                                    Data: {report.date} • {report.config.type.toUpperCase()}
+                                                                </span>
+                                                            </div>
+                                                            <button className="btn-delete-report no-print" onClick={() => deleteReport(report.id)}>✕</button>
+                                                        </div>
+                                                        <MiniReportChart report={report} allDays={dietDays} />
+                                                    </div>
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-            {dietDays.map((day) => {
-                const currentDayMeals = day.meals || [];
-                const currentMealStats = currentDayMeals.map(m => ({ 
-                    title: m.title, totals: calculateTotals(m.items), id: m.id 
-                }));
-                
-                const currentDayTotals = currentMealStats.reduce((acc, curr) => ({
-                    kcal: acc.kcal + curr.totals.kcal, p: acc.p + curr.totals.p, c: acc.c + curr.totals.c, f: acc.f + curr.totals.f
-                }), { kcal: 0, p: 0, c: 0, f: 0 });
-
-                return (
-                    <div key={day.id} id={day.id} className="day-summary-card">
-                        <div className="day-summary-header">
-                            <input 
-                                type="text" 
-                                className="day-title-input" 
-                                value={day.title} 
-                                onChange={e => updateDayTitle(day.id, e.target.value)} 
-                                placeholder="Nome Giornata..."
-                            />
-                            <div className="day-macro-summary no-print">
-                                <span style={{ color: '#1D1D1F' }}>{currentDayTotals.kcal.toFixed(0)} kcal</span>
-                                <span style={{ color: '#1D1D1F' }}>C: {currentDayTotals.c.toFixed(0)}g</span>
-                                <span style={{ color: '#00C853' }}>P: {currentDayTotals.p.toFixed(0)}g</span>
-                                <span style={{ color: '#86868B' }}>F: {currentDayTotals.f.toFixed(0)}g</span>
-                            </div>
-                        </div>
-
-                        <div className="meal-rect-grid">
-                            {currentMealStats.map((m) => (
-                                <div 
-                                    key={m.id} 
-                                    className="meal-rect-card" 
-                                    onClick={() => setActiveMealInfo({ dayId: day.id, mealId: m.id })}
-                                >
-                                    <input 
-                                        type="text" 
-                                        className="meal-title-input" 
-                                        value={m.title} 
-                                        onClick={(e) => e.stopPropagation()} 
-                                        onChange={e => updateMealTitle(day.id, m.id, e.target.value)} 
-                                    />
-                                    <div className="meal-rect-stats">
-                                        <div className="meal-macro-col">
-                                            <span><span style={{ color: '#1D1D1F' }}>C:</span> {m.totals.c.toFixed(0)}g</span>
-                                            <span><span style={{ color: '#00C853' }}>P:</span> {m.totals.p.toFixed(0)}g</span>
-                                            <span><span style={{ color: '#86868B' }}>F:</span> {m.totals.f.toFixed(0)}g</span>
-                                        </div>
-                                        <div style={{ fontSize: '20px', fontWeight: 800, color: '#00C853', lineHeight: '1' }}>
-                                            {m.totals.kcal.toFixed(0)}
-                                        </div>
+                                                    {hasComment && (
+                                                        <div className="report-comment-box">
+                                                            <span style={{ display: 'block', fontSize: '10px', color: '#00C853', fontWeight: 800, textTransform: 'uppercase', marginBottom: '8px', letterSpacing: '0.5px' }}>Note Cliniche</span>
+                                                            {report.config.comment}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            );
+                                        })}
                                     </div>
                                 </div>
-                            ))}
-                        </div>
-                    </div>
-                );
-            })}
-        </div>
-
-        {/* 4. ARCHIVIO REPORT CLINICI (Adattivo in fondo alla pagina) */}
-        {savedReports.length > 0 && (
-            <div className="saved-reports-section" style={{ marginTop: '50px', paddingBottom: '60px' }}>
-                <div style={{ marginBottom: '25px', borderBottom: '2px solid #E5E5EA', paddingBottom: '10px' }}>
-                    <span style={{ fontSize: '22px', fontWeight: 800, color: '#1D1D1F' }}>Archivio Report Clinici</span>
+                            )}
+                        </>
+                    )}
                 </div>
-                
-                <div className="reports-grid">
-                    {savedReports.map(report => {
-                        const hasComment = report.config.comment && report.config.comment.trim() !== '';
-                        return (
-                            <div key={report.id} className={`report-card ${hasComment ? 'double' : ''}`}>
-                                <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-                                    <div className="report-card-header">
-                                        <div>
-                                            <h4 className="report-card-title">{report.dayTitle}</h4>
-                                            <span className="report-card-subtitle">
-                                                Data: {report.date} • {report.config.type.toUpperCase()}
-                                            </span>
-                                        </div>
-                                        <button className="btn-delete-report no-print" onClick={() => deleteReport(report.id)}>✕</button>
-                                    </div>
-                                    <MiniReportChart report={report} allDays={dietDays} />
-                                </div>
-
-                                {hasComment && (
-                                    <div className="report-comment-box">
-                                        <span style={{ display: 'block', fontSize: '10px', color: '#00C853', fontWeight: 800, textTransform: 'uppercase', marginBottom: '8px', letterSpacing: '0.5px' }}>Note Cliniche</span>
-                                        {report.config.comment}
-                                    </div>
-                                )}
-                            </div>
-                        );
-                    })}
-                </div>
-            </div>
-        )}
-
-    </div>
-</main>
+            </main>
 
             {/* --- FINESTRA MODALE IN SOVRAPPRESSIONE PER COMPILARE IL PASTO --- */}
             {activeMealInfo && (() => {
@@ -1914,24 +2013,30 @@ export const DietPlan = ({ patient }) => {
                 const rmr = calculateRMR(calcData);
                 const tdee = Math.round(rmr * calcData.laf);
 
-                // Calcolo Grammi totali giornalieri (4kcal per C e P, 9kcal per F)
-                const totalC_kcal = tdee * (calcData.macroTargets.c / 100);
-                const totalP_kcal = tdee * (calcData.macroTargets.p / 100);
-                const totalF_kcal = tdee * (calcData.macroTargets.f / 100);
+                // LOGICA PRO: Globale o Giorno per Giorno
+                const isDailyMode = calcData.matrixMode === 'daily';
+                const activeDayConfig = isDailyMode && calcData.activeMatrixDayId && calcData.dailyConfigs[calcData.activeMatrixDayId] 
+                    ? calcData.dailyConfigs[calcData.activeMatrixDayId] : calcData;
+
+                const currentMacroTargets = activeDayConfig.macroTargets;
+                const currentDistribution = activeDayConfig.distribution;
+
+                // Usa currentMacroTargets invece di calcData
+                const totalC_kcal = tdee * (currentMacroTargets.c / 100);
+                const totalP_kcal = tdee * (currentMacroTargets.p / 100);
+                const totalF_kcal = tdee * (currentMacroTargets.f / 100);
                 const totalC_g = totalC_kcal / 4;
                 const totalP_g = totalP_kcal / 4;
                 const totalF_g = totalF_kcal / 9;
 
-                // Calcolo totali della partizione (ora è un Array, usiamo map/reduce sui 'value')
-                const totalDist = calcData.distribution.reduce((acc, curr) => acc + (Number(curr.value) || 0), 0);
+                // Usa currentDistribution invece di calcData
+                const totalDist = currentDistribution.reduce((acc, curr) => acc + (Number(curr.value) || 0), 0);
+                const totalMacros = currentMacroTargets.c + currentMacroTargets.p + currentMacroTargets.f;
                 
-                // Calcolo errore per il colore di sfondo (più ti allontani da 100, più diventa rosso)
                 const distDiff = Math.abs(100 - totalDist);
-                const errorOpacity = setupTab === 'partizione matriciale' ? Math.min(distDiff * 0.015, 0.2) : 0; // Max 20% di rosso
-                const bgDynamicColor = totalDist === 100 && setupTab === 'partizione matriciale' 
-                    ? '#F2FFF7' // Verdino se perfetto
-                    : `rgba(255, 59, 48, ${errorOpacity})`; // Sfumatura rossa progressiva se sbagli percentuale
-
+                const errorOpacity = setupTab === 'partizione matriciale' ? Math.min(distDiff * 0.015, 0.2) : 0;
+                const isViewValid = totalDist === 100 && totalMacros === 100;
+                const bgDynamicColor = isViewValid && setupTab === 'partizione matriciale' ? '#F2FFF7' : `rgba(255, 59, 48, ${errorOpacity})`;
                 return (
                     <div className="modal-backdrop">
                         {/* FINESTRA PRINCIPALE SQUIRCLE */}
@@ -2065,7 +2170,55 @@ export const DietPlan = ({ patient }) => {
                                 {/* TAB 3: PARTIZIONE MATRICIALE (PRO) */}
                                 {setupTab === 'partizione matriciale' && (
                                     <div style={{ display: 'flex', flexDirection: 'column', gap: '25px' }}>
-                                        
+                                        {/* TOGGLE MODALITÀ GLOBALE vs DAILY */}
+                                        <div style={{ display: 'flex', gap: '10px', background: '#FFFFFF', padding: '8px', borderRadius: '16px', border: '1px solid #E5E5EA' }}>
+                                            <button 
+                                                className={`segmented-btn ${!isDailyMode ? 'active' : ''}`} 
+                                                onClick={() => setCalcData({...calcData, matrixMode: 'global'})} 
+                                                style={{ flex: 1, padding: '12px', fontSize: '13px', fontWeight: 800 }}>
+                                                🌍 Struttura Globale
+                                            </button>
+                                            <button 
+                                                className={`segmented-btn ${isDailyMode ? 'active' : ''}`} 
+                                                onClick={() => { 
+                                                    const firstId = dietDays[0]?.id; 
+                                                    setCalcData(p => {
+                                                        const newDailyConfigs = { ...p.dailyConfigs };
+                                                        if (firstId && !newDailyConfigs[firstId]) {
+                                                            newDailyConfigs[firstId] = { 
+                                                                macroTargets: { ...p.macroTargets }, 
+                                                                distribution: p.distribution.map(d => ({...d})) 
+                                                            };
+                                                        }
+                                                        return { ...p, matrixMode: 'daily', activeMatrixDayId: firstId, dailyConfigs: newDailyConfigs };
+                                                    }); 
+                                                }} 
+                                                style={{ flex: 1, padding: '12px', fontSize: '13px', fontWeight: 800 }}>
+                                                ⚡️ PRO: Giorno per Giorno
+                                            </button>
+                                        </div>
+
+                                        {/* SELETTORE GIORNO (Solo in modalità Daily) */}
+                                        {isDailyMode && (
+                                            <div className="analysis-nav" style={{ padding: '0', marginBottom: '0', border: 'none' }}>
+                                                {dietDays.map((day, idx) => (
+                                                    <div key={day.id} 
+                                                        className={`analysis-chip ${calcData.activeMatrixDayId === day.id ? 'active' : ''}`} 
+                                                        onClick={() => setCalcData(p => {
+                                                            const newDailyConfigs = { ...p.dailyConfigs };
+                                                            if (!newDailyConfigs[day.id]) {
+                                                                newDailyConfigs[day.id] = { 
+                                                                    macroTargets: { ...p.macroTargets }, 
+                                                                    distribution: p.distribution.map(d => ({...d})) 
+                                                                };
+                                                            }
+                                                            return { ...p, activeMatrixDayId: day.id, dailyConfigs: newDailyConfigs };
+                                                        })}>
+                                                        {day.title || `G${idx + 1}`}
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
                                         {/* Target Macro Globali */}
                                         <div className="smart-card" style={{ padding: '20px 25px' }}>
                                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
@@ -2108,9 +2261,29 @@ export const DietPlan = ({ patient }) => {
                                                     {calcData.distribution.map(meal => {
                                                         const pct = meal.value / 100;
                                                         return (
-                                                            <tr key={meal.id} className="laf-row">
+                                                            <tr 
+                                                                key={meal.id} 
+                                                                className={`laf-row ${matrixDragOverId === meal.id ? 'drag-over-active' : ''}`}
+                                                                draggable
+                                                                onDragStart={(e) => {
+                                                                    setMatrixDragId(meal.id);
+                                                                    setTimeout(() => e.target.style.opacity = '0.4', 0);
+                                                                }}
+                                                                onDragEnd={(e) => {
+                                                                    e.target.style.opacity = '1';
+                                                                    setMatrixDragId(null);
+                                                                    setMatrixDragOverId(null);
+                                                                }}
+                                                                onDragOver={(e) => {
+                                                                    e.preventDefault();
+                                                                    if (matrixDragOverId !== meal.id) setMatrixDragOverId(meal.id);
+                                                                }}
+                                                                onDragLeave={() => setMatrixDragOverId(null)}
+                                                                onDrop={(e) => handleMatrixDrop(e, meal.id)}
+                                                                style={{ cursor: 'grab' }}
+                                                            >
                                                                 <td>
-                                                                    <input type="text" className="laf-input" value={meal.name} onChange={e => updateMatrixMeal(meal.id, 'name', e.target.value)} style={{ padding: '4px', margin: 0 }} />
+                                                                    <input type="text" className="laf-input" value={meal.name} onChange={e => updateMatrixMeal(meal.id, 'name', e.target.value)} style={{ padding: '4px', margin: 0, cursor: 'text' }} />
                                                                 </td>
                                                                 <td style={{ textAlign: 'center' }}>
                                                                     <input type="number" className="matrix-input" value={meal.value} onChange={e => updateMatrixMeal(meal.id, 'value', Number(e.target.value))} /> <span style={{fontSize:'10px', color:'#86868B'}}>%</span>
@@ -2120,7 +2293,10 @@ export const DietPlan = ({ patient }) => {
                                                                 <td style={{ textAlign: 'center' }}>{Math.round(totalP_g * pct)}</td>
                                                                 <td style={{ textAlign: 'center' }}>{Math.round(totalF_g * pct)}</td>
                                                                 <td style={{ textAlign: 'center' }}>
-                                                                    <button onClick={() => removeMatrixMeal(meal.id)} style={{ background: 'transparent', border: 'none', color: '#FF3B30', fontWeight: 900, cursor: 'pointer', padding: '5px' }}>✕</button>
+                                                                    <div style={{ display: 'flex', gap: '5px', justifyContent: 'center' }}>
+                                                                        <button onClick={() => duplicateMatrixMeal(meal.id)} title="Duplica Pasto" style={{ background: 'transparent', border: 'none', color: '#007AFF', fontWeight: 900, cursor: 'pointer', padding: '5px', fontSize: '14px' }}>⧉</button>
+                                                                        <button onClick={() => removeMatrixMeal(meal.id)} title="Elimina Pasto" style={{ background: 'transparent', border: 'none', color: '#FF3B30', fontWeight: 900, cursor: 'pointer', padding: '5px', fontSize: '14px' }}>✕</button>
+                                                                    </div>
                                                                 </td>
                                                             </tr>
                                                         )
@@ -2143,15 +2319,18 @@ export const DietPlan = ({ patient }) => {
                                 <button 
                                     disabled={totalDist !== 100}
                                     onClick={() => {
-                                        setTargets(prev => ({ 
-                                            ...prev, 
-                                            kcal: tdee, 
-                                            c: calcData.macroTargets.c, 
-                                            p: calcData.macroTargets.p, 
-                                            f: calcData.macroTargets.f 
+                                        setTargets({ kcal: tdee, c: calcData.macroTargets.c, p: calcData.macroTargets.p, f: calcData.macroTargets.f, isConfigured: true });
+
+                                        setDietDays(prevDays => prevDays.map(day => {
+                                            const dayConfig = calcData.matrixMode === 'daily' && calcData.dailyConfigs[day.id] ? calcData.dailyConfigs[day.id] : { macroTargets: calcData.macroTargets, distribution: calcData.distribution };
+                                            const syncedMeals = dayConfig.distribution.map(distMeal => {
+                                                const existingMeal = day.meals?.find(m => m.title.toLowerCase() === distMeal.name.toLowerCase());
+                                                return { id: existingMeal ? existingMeal.id : genId(), title: distMeal.name, items: existingMeal ? existingMeal.items : [] };
+                                            });
+                                            return { ...day, meals: syncedMeals, targets: { kcal: tdee, ...dayConfig.macroTargets } };
                                         }));
                                         setIsSetupOpen(false);
-                                    }} 
+                                    }}
                                     style={{ 
                                         background: totalDist === 100 ? '#00C853' : '#E5E5EA', 
                                         color: totalDist === 100 ? 'white' : '#86868B', 
