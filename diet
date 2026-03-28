@@ -1770,6 +1770,7 @@ export const DietPlan = ({ patient }) => {
                 if (!currentMeal) return null;
 
                 const currentMealTotals = calculateTotals(currentMeal.items);
+                
 
                 return (
                     <div className="modal-backdrop">
@@ -2035,9 +2036,21 @@ export const DietPlan = ({ patient }) => {
                 
                 const distDiff = Math.abs(100 - totalDist);
                 const errorOpacity = setupTab === 'partizione matriciale' ? Math.min(distDiff * 0.015, 0.2) : 0;
-                const isViewValid = totalDist === 100 && totalMacros === 100;
-                const bgDynamicColor = isViewValid && setupTab === 'partizione matriciale' ? '#F2FFF7' : `rgba(255, 59, 48, ${errorOpacity})`;
-                return (
+                const isViewValid = totalDist === 100 && totalMacros === 100; // Questo controlla solo la schermata attuale
+                
+                let isAllValid = true;
+                if (calcData.matrixMode === 'global') {
+                    isAllValid = (totalMacros === 100 && totalDist === 100);
+                } else {
+                    isAllValid = dietDays.every(day => {
+                        const dayConfig = calcData.dailyConfigs[day.id] || { macroTargets: calcData.macroTargets, distribution: calcData.distribution };
+                        const mSum = dayConfig.macroTargets.c + dayConfig.macroTargets.p + dayConfig.macroTargets.f;
+                        const dSum = dayConfig.distribution.reduce((acc, curr) => acc + (Number(curr.value) || 0), 0);
+                        return mSum === 100 && dSum === 100;
+                    });
+}
+                
+                const bgDynamicColor = isViewValid && setupTab === 'partizione matriciale' ? '#F2FFF7' : `rgba(255, 59, 48, ${errorOpacity})`;                return (
                     <div className="modal-backdrop">
                         {/* FINESTRA PRINCIPALE SQUIRCLE */}
                         <div className="modal-window" style={{ width: '900px', maxWidth: '95%', height: '90vh', display: 'flex', flexDirection: 'column' }}>
@@ -2231,7 +2244,7 @@ export const DietPlan = ({ patient }) => {
                                                 {['c', 'p', 'f'].map(m => (
                                                     <div key={m} style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '10px', background: '#FAFAFC', padding: '10px 15px', borderRadius: '12px' }}>
                                                         <span style={{ fontWeight: 800, color: m==='c'?'#1D1D1F':m==='p'?'#00C853':'#86868B', textTransform: 'uppercase' }}>{m}</span>
-                                                        <input type="number" className="matrix-input" value={calcData.macroTargets[m]} onChange={e => setCalcData({...calcData, macroTargets: {...calcData.macroTargets, [m]: Number(e.target.value)}})} />
+                                                            <input type="number" className="matrix-input" value={currentMacroTargets[m]} onChange={e => updateMatrixMacro(m, e.target.value)} />
                                                         <span style={{ fontWeight: 800, color: '#86868B' }}>%</span>
                                                     </div>
                                                 ))}
@@ -2258,7 +2271,7 @@ export const DietPlan = ({ patient }) => {
                                                     </tr>
                                                 </thead>
                                                 <tbody>
-                                                    {calcData.distribution.map(meal => {
+                                                    {currentDistribution.map(meal => {
                                                         const pct = meal.value / 100;
                                                         return (
                                                             <tr 
@@ -2317,7 +2330,7 @@ export const DietPlan = ({ patient }) => {
                             {/* FOOTER INTELLIGENTE */}
                             <div style={{ padding: '20px 40px', borderTop: '1px solid #F0F0F2', background: '#FFFFFF', display: 'flex', justifyContent: 'flex-end', alignItems: 'center' }}>
                                 <button 
-                                    disabled={totalDist !== 100}
+                                    disabled={!isAllValid}
                                     onClick={() => {
                                         setTargets({ kcal: tdee, c: calcData.macroTargets.c, p: calcData.macroTargets.p, f: calcData.macroTargets.f, isConfigured: true });
 
