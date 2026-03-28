@@ -264,6 +264,12 @@ export const DietPlan = ({ patient }) => {
 
 
     const [setupTab, setSetupTab] = useState('antropometria');
+    const [showGlossary, setShowGlossary] = useState(false);
+    const TECHNICAL_FIELDS = [
+    'food_code', 'samples_number', 'edible_part', 'portion', 
+    'energy_kj', 'image', 'name', 'category', 'scientific_name', 
+    'english_name', 'info', 'water' // Water di solito si mette a parte o si esclude
+];
 
     
 
@@ -345,17 +351,17 @@ export const DietPlan = ({ patient }) => {
     // --- STATI ANALISI CLINICA E DRV (EFSA) ---
     const [drvDB, setDrvDB] = useState(() => {
         const stored = localStorage.getItem('diet_drv_db');
-        const [drvSearch, setDrvSearch] = useState('');
         return stored ? JSON.parse(stored) : [];
     });
     useEffect(() => { localStorage.setItem('diet_drv_db', JSON.stringify(drvDB)); }, [drvDB]);
+
+    const [drvSearch, setDrvSearch] = useState(''); 
 
     const [isAnalysisOpen, setIsAnalysisOpen] = useState(false);
     const [analysisTimeframe, setAnalysisTimeframe] = useState('day'); // 'meal', 'day', 'week'
     const [isDrvEditorOpen, setIsDrvEditorOpen] = useState(false);
     const drvFileInputRef = useRef(null);
 
-    
 
     const [analysisTargetId, setAnalysisTargetId] = useState('all'); // 'all' o l'ID del giorno
 
@@ -1111,16 +1117,32 @@ const HistoryIcon = () => (
     };
 
     // Trova i target EFSA per il paziente corrente
+    // Calcola i Target per il Paziente Corrente (Incrocio EFSA)
+    // --- MATCHING ROBUSTO EFSA/LARN ---
+    // Calcola i Target per il Paziente Corrente (Incrocio EFSA)
     const getPatientTargets = () => {
-        // Filtra il DB EFSA in base a Gender e Age del paziente
-        // Nota: EFSA usa fasce d'età (es. "18-39 years"). Qui prendiamo tutti quelli applicabili al "Gender" o "All".
         const targets = {};
+        
         drvDB.forEach(row => {
-            if (row.Gender === patientProfile.gender || row.Gender === "All") {
-                // Per semplificare: prendiamo l'ultimo valore valido (ideale: match esatto fascia d'età)
-                const mappedKey = NUTRIENT_MAPPING[row.Nutrient];
+            // 1. MATCH DEL GENERE (A prova di EFSA/LARN)
+            const rowGender = (row.Gender || "").toLowerCase().trim();
+            const isMale = patientProfile.gender === 'Male';
+            
+            // Riconosce automaticamente tutti i modi in cui i DB scrivono il sesso
+            const isGenderMatch = 
+                rowGender === "" || 
+                rowGender === "all" || 
+                rowGender === "both" || 
+                (isMale && (rowGender === "male" || rowGender === "men" || rowGender === "boys")) ||
+                (!isMale && (rowGender === "female" || rowGender === "women" || rowGender === "girls"));
+
+            if (isGenderMatch) {
+                // 2. MATCH DEL NUTRIENTE (Case-Insensitive e senza spazi extra)
+                const rawNutrient = (row.Nutrient || "").toLowerCase().trim();
+                const foundKey = Object.keys(NUTRIENT_MAPPING).find(k => k.toLowerCase() === rawNutrient);
+                const mappedKey = foundKey ? NUTRIENT_MAPPING[foundKey] : null;
+
                 if (mappedKey) {
-                    // Cerca il target migliore (PRI > AI > AR)
                     let targetVal = parseEFSAValue(row.PRI) || parseEFSAValue(row.AI) || parseEFSAValue(row.AR);
                     let ulVal = parseEFSAValue(row.UL);
                     
@@ -1128,7 +1150,7 @@ const HistoryIcon = () => (
                         targets[mappedKey] = {
                             name: row.Nutrient,
                             target: targetVal,
-                            ul: ulVal,
+                            ul: ulVal > 0 ? ulVal : null,
                             unit: String(row.PRI || row.AI || row.AR).replace(/[\d.\s]/g, '').replace('/day', '').trim() || 'mg'
                         };
                     }
@@ -1136,6 +1158,17 @@ const HistoryIcon = () => (
             }
         });
         return targets;
+    };
+
+    // --- HELPER PER CATEGORIE ---
+    const categorizeNutrient = (key) => {
+        const aminos = ['alanine', 'arginine', 'aspartic_acid', 'cystine', 'glutamic_acid', 'glycine', 'histidine', 'isoleucine', 'leucine', 'lysine', 'methionine', 'phenylalanine', 'proline', 'serine', 'threonine', 'tryptophan', 'tyrosine', 'valine'];
+        const bio = ['caffeic_acid', 'citric_acid', 'phytic_acid', 'malic_acid', 'apigenin', 'campferol', 'phytosterols', 'polyphenols', 'quercetin', 'lutein', 'zeaxanthin', 'lycopene'];
+        
+        if (aminos.includes(key)) return { label: 'Pool Amminoacidico', icon: 'ph-dna', color: 'text-purple-500' };
+        if (key.includes(':') || key.toLowerCase().includes('fatty_acid')) return { label: 'Profilo Lipidico', icon: 'ph-drop', color: 'text-blue-500' };
+        if (bio.includes(key)) return { label: 'Bioattivi & Fitocomposti', icon: 'ph-leaf', color: 'text-green-500' };
+        return { label: 'Altri Micronutrienti', icon: 'ph-dots-three-circle', color: 'text-gray-400' };
     };
 
     // --- MOTORE DI CALCOLO MICRONUTRIENTI ---
@@ -3311,355 +3344,293 @@ const HistoryIcon = () => (
                 </div>
             )}
 
-            {/* --- MODALE ANALISI CLINICA AVANZATA --- */}
+            
+            
+
+            {/* --- MODALE 1: ANALISI CLINICA AVANZATA (UI/UX MINIMAL & SMART) --- */}
             {isAnalysisOpen && (() => {
                 const patientTargets = getPatientTargets();
-                const currentProfile = analyzeCompleteBioProfile(dietDays); // La funzione che somma i nutrienti (dal messaggio precedente)
+                const profileResult = analyzeCompleteBioProfile(dietDays);
+                const currentProfile = profileResult.data || profileResult;
                 
-                // Moltiplicatori in base al timeframe
                 let multiplier = 1;
-                let timeframeLabel = "Giornaliero";
-                if (analysisTimeframe === 'week') { multiplier = 7; timeframeLabel = "Settimanale"; }
-                if (analysisTimeframe === 'meal') { multiplier = 0.33; timeframeLabel = "Pasto (Stima 33%)"; } // Semplificazione per il target del pasto
+                if (analysisTimeframe === 'week') multiplier = 7;
+                if (analysisTimeframe === 'meal') multiplier = 1 / (profileResult.avgMealsPerDay || 4);
+
+                // FUNZIONE DI CATEGORIZZAZIONE AUTOMATICA
+                const categorizeNutrient = (key) => {
+                    const aminos = ['alanine', 'arginine', 'aspartic_acid', 'cystine', 'glutamic_acid', 'glycine', 'histidine', 'isoleucine', 'leucine', 'lysine', 'methionine', 'phenylalanine', 'proline', 'serine', 'threonine', 'tryptophan', 'tyrosine', 'valine'];
+                    const carbo = ['starch', 'soluble_sugars', 'sucrose', 'glucose', 'fructose', 'lactose', 'galactose', 'maltose', 'soluble_fiber', 'insoluble_fiber', 'alcohol'];
+                    const bio = ['caffeic_acid', 'citric_acid', 'phytic_acid', 'malic_acid', 'apigenin', 'campferol', 'phytosterols', 'polyphenols', 'quercetin', 'lutein', 'zeaxanthin', 'lycopene', 'beta_carotene', 'alpha_carotene', 'total_carotenoids'];
+                    
+                    if (aminos.includes(key)) return { label: 'Pool Amminoacidico', icon: 'ph-dna', color: 'text-purple-500' };
+                    if (carbo.includes(key)) return { label: 'Carboidrati & Fibre Dettagliate', icon: 'ph-grains', color: 'text-amber-500' };
+                    if (bio.includes(key)) return { label: 'Fitocomposti & Bioattivi', icon: 'ph-leaf', color: 'text-green-500' };
+                    if (key.includes(':') || key.toLowerCase().includes('fatty_acid') || key === 'cholesterol') return { label: 'Profilo Lipidico Specifico', icon: 'ph-drop', color: 'text-blue-500' };
+                    return { label: 'Altri Micronutrienti', icon: 'ph-dots-three-circle', color: 'text-gray-500' };
+                };
+
+                // Raggruppa i dati extra
+                const otherMicros = Object.entries(currentProfile)
+                .filter(([k, v]) => {
+                    // Lista dei campi tecnici da NASCONDERE sempre dai risultati
+                    const technicalFields = [
+                        'food_code', 'samples_number', 'edible_part', 'portion', 
+                        'energy_kj', 'image', 'name', 'category', 'scientific_name', 
+                        'english_name', 'info'
+                    ];
+                    
+                    return v > 0 && 
+                        !patientTargets[k] && 
+                        k !== 'energy_kcal' && 
+                        !technicalFields.includes(k);
+                });
+                const groupedMicros = otherMicros.reduce((acc, [key, val]) => {
+                    const cat = categorizeNutrient(key);
+                    if(!acc[cat.label]) acc[cat.label] = { items: [], icon: cat.icon, color: cat.color };
+                    acc[cat.label].items.push({key, val});
+                    return acc;
+                }, {});
 
                 return (
-                    <div className="fixed inset-0 z-[13000] flex items-center justify-center p-4 bg-black/80 backdrop-blur-xl fade-enter">
-                        <div className="bg-white rounded-[32px] shadow-2xl w-full max-w-7xl h-[95vh] flex flex-col overflow-hidden border border-white/20">
+                    <div className="fixed inset-0 z-[13000] flex items-center justify-center p-4 lg:p-6 bg-black/60 backdrop-blur-xl fade-enter">
+                        <div className="bg-[#FAFAFC] rounded-[36px] shadow-2xl w-full max-w-7xl h-[95vh] flex flex-col overflow-hidden border border-white/20 relative">
                             
-                            {/* 1. RECAP PAZIENTE MINIMAL */}
-                            <div className="bg-gray-900 text-white p-4 shrink-0 flex items-center justify-between">
-                                <div className="flex items-center gap-6">
-                                    <div className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center border border-white/20">
-                                        <i className="ph-fill ph-user text-xl"></i>
+                            {/* 1. HEADER SOSPESO "ISOLA" */}
+                            <div className="m-4 lg:m-6 bg-gray-900 rounded-[28px] text-white p-4 shrink-0 flex items-center justify-between shadow-xl shadow-black/20 z-20">
+                                <div className="flex items-center gap-4 lg:gap-6">
+                                    <div className="w-12 h-12 rounded-full bg-gradient-to-br from-gray-700 to-gray-800 flex items-center justify-center border border-gray-600 shadow-inner">
+                                        <i className="ph-fill ph-user-circle text-2xl text-gray-300"></i>
                                     </div>
-                                    <div className="flex items-center gap-4 text-xs">
-                                        <div><span className="text-gray-400 block text-[9px] uppercase font-bold tracking-wider">Paziente</span><span className="font-black text-sm">{patientProfile.name}</span></div>
-                                        <div className="w-px h-6 bg-white/20"></div>
-                                        <div><span className="text-gray-400 block text-[9px] uppercase font-bold tracking-wider">Bio</span><span className="font-bold">{patientProfile.age} anni, {patientProfile.gender === 'Male' ? 'Uomo' : 'Donna'}, {patientProfile.weight}kg</span></div>
-                                        <div className="w-px h-6 bg-white/20"></div>
+                                    <div className="flex items-center gap-4 lg:gap-8 text-xs">
                                         <div>
-                                            <span className="text-gray-400 block text-[9px] uppercase font-bold tracking-wider">Allergie / Patologie</span>
-                                            <div className="flex gap-2 mt-0.5">
-                                                {patientProfile.allergies.map(a => <span key={a} className="bg-red-500/20 text-red-300 px-2 py-0.5 rounded text-[9px] font-bold border border-red-500/30">{a}</span>)}
-                                                {patientProfile.pathologies.map(p => <span key={p} className="bg-amber-500/20 text-amber-300 px-2 py-0.5 rounded text-[9px] font-bold border border-amber-500/30">{p}</span>)}
+                                            <span className="text-gray-400 block text-[9px] uppercase font-black tracking-widest mb-0.5">Paziente</span>
+                                            <span className="font-bold text-sm text-white">{patientProfile.name}</span>
+                                        </div>
+                                        <div className="w-px h-8 bg-gray-700"></div>
+                                        <div>
+                                            <span className="text-gray-400 block text-[9px] uppercase font-black tracking-widest mb-0.5">Biometria</span>
+                                            <span className="font-medium text-gray-200">{patientProfile.age}y • {patientProfile.gender === 'Male' ? 'Uomo' : 'Donna'} • {patientProfile.weight}kg</span>
+                                        </div>
+                                        <div className="w-px h-8 bg-gray-700 hidden lg:block"></div>
+                                        <div className="hidden lg:block">
+                                            <span className="text-gray-400 block text-[9px] uppercase font-black tracking-widest mb-1">Clinica</span>
+                                            <div className="flex gap-1.5">
+                                                {patientProfile.allergies.map(a => <span key={a} className="bg-red-500/20 text-red-400 px-2 py-0.5 rounded-md text-[9px] font-bold uppercase">{a}</span>)}
+                                                {patientProfile.pathologies.map(p => <span key={p} className="bg-amber-500/20 text-amber-400 px-2 py-0.5 rounded-md text-[9px] font-bold uppercase">{p}</span>)}
                                             </div>
                                         </div>
                                     </div>
                                 </div>
+                                {/* Nel Header nero, aggiungi il tasto Info prima del tasto X */}
                                 <div className="flex gap-2">
-                                    <button onClick={() => setIsDrvEditorOpen(true)} className="px-4 py-2 bg-white/10 hover:bg-white/20 rounded-xl text-xs font-bold transition-colors flex items-center gap-2">
+                                    <button 
+                                        onClick={() => setShowGlossary(!showGlossary)} 
+                                        className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all border ${showGlossary ? 'bg-blue-600 border-blue-500 text-white' : 'bg-white/10 border-white/20 text-gray-300 hover:bg-white/20'}`}
+                                        title="Glossario e Abbreviazioni"
+                                    >
+                                        <i className={`ph-bold ${showGlossary ? 'ph-info-fill' : 'ph-info'} text-lg`}></i>
+                                    </button>
+                                    <button onClick={() => setIsDrvEditorOpen(true)} className="px-4 py-2 bg-white/10 hover:bg-white/20 rounded-xl text-xs font-bold transition-colors flex items-center gap-2 border border-white/20 text-gray-200">
                                         <i className="ph-bold ph-database"></i> Database EFSA
                                     </button>
-                                    <button onClick={() => setIsAnalysisOpen(false)} className="w-10 h-10 bg-white/10 hover:bg-red-500/20 hover:text-red-400 rounded-xl flex items-center justify-center transition-colors">
+                                    <button onClick={() => setIsAnalysisOpen(false)} className="w-10 h-10 bg-white/10 hover:bg-red-500/20 hover:text-red-400 rounded-xl flex items-center justify-center transition-colors border border-white/20">
                                         <i className="ph-bold ph-x"></i>
                                     </button>
                                 </div>
                             </div>
 
-                            {/* 2. BARRA STRUMENTI & TIMEFRAME */}
-                            <div className="px-8 py-4 bg-white border-b border-gray-100 flex justify-between items-center shrink-0 z-10 shadow-sm">
-                                <h3 className="text-xl font-black text-gray-900">Analisi Micronutrizionale</h3>
-                                <div className="flex bg-gray-100 p-1 rounded-xl">
+                            {/* 2. SUB-HEADER */}
+                            <div className="px-8 py-2 flex flex-col md:flex-row justify-between items-start md:items-end shrink-0 z-10 gap-4">
+                                <div>
+                                    <h3 className="text-2xl font-black text-gray-900 tracking-tight">Screening Molecolare</h3>
+                                    <p className="text-xs font-bold text-gray-400 mt-1 uppercase tracking-wider">Incrocio con i DRV</p>
+                                </div>
+                                <div className="flex bg-white p-1 rounded-2xl shadow-sm border border-gray-100">
                                     {['meal', 'day', 'week'].map(tf => (
                                         <button 
                                             key={tf} onClick={() => setAnalysisTimeframe(tf)}
-                                            className={`px-6 py-2 rounded-lg text-xs font-bold transition-all ${analysisTimeframe === tf ? 'bg-white text-black shadow-sm scale-100' : 'text-gray-500 hover:bg-gray-200'}`}
+                                            className={`px-6 py-2.5 rounded-xl text-xs font-bold transition-all duration-300 ${analysisTimeframe === tf ? 'bg-black text-white shadow-md transform scale-100' : 'text-gray-500 hover:bg-gray-100'}`}
                                         >
-                                            {tf === 'meal' ? 'Singolo Pasto' : tf === 'day' ? 'Media Giornaliera' : 'Totale Settimanale'}
+                                            {tf === 'meal' ? 'Stima Pasto' : tf === 'day' ? 'Media Die' : 'Settimana'}
                                         </button>
                                     ))}
                                 </div>
                             </div>
 
-                            {/* 3. GRIGLIA CARD DINAMICHE */}
-                            <div className="flex-1 overflow-y-auto p-8 bg-gray-50/50">
-                                {/* SEZIONE A: COMPONENTI CON TARGET (EFSA) */}
-                                <div className="mb-8">
-                                    <h4 className="text-sm font-black text-gray-400 uppercase tracking-widest mb-4 flex items-center gap-2">
-                                        <i className="ph-fill ph-target text-blue-500"></i> Componenti con Reference (EFSA/LARN)
-                                    </h4>
-                                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                            {/* --- SEZIONE GLOSSARIO DINAMICA --- */}
+                            {showGlossary && (
+                                <div className="mx-8 mt-4 mb-8 bg-white rounded-3xl border border-blue-100 shadow-sm overflow-hidden animate-fade-in-down">
+                                    <div className="p-6 grid grid-cols-1 lg:grid-cols-2 gap-8">
+                                        
+                                        {/* DEFINIZIONI */}
+                                        <div>
+                                            <h5 className="text-[10px] font-black uppercase text-blue-500 tracking-widest mb-4 flex items-center gap-2">
+                                                <i className="ph-fill ph-book-open text-lg"></i> Glossary & Definitions
+                                            </h5>
+                                            <div className="space-y-4 max-h-[400px] overflow-y-auto pr-4 custom-scrollbar">
+                                                {[
+                                                    { t: "Adequate intake (AI)", d: "Value set when data is insufficient for an average requirement. It's assumed to be adequate based on observations." },
+                                                    { t: "Average requirement (AR)", d: "Intake meeting the daily needs of half the people in a healthy population." },
+                                                    { t: "Population reference intake (PRI)", d: "Intake likely to meet the daily needs of almost all people in a healthy population." },
+                                                    { t: "Tolerable upper intake level (UL)", d: "The maximum chronic daily intake unlikely to pose risk of adverse health effects." },
+                                                    { t: "Reference intake range (RI)", d: "Energy proportion (%) for macronutrients adequate for maintaining health." },
+                                                    { t: "Safe and Adequate Intake", d: "Used for Sodium/Chloride: a level compatible with good health while minimizing CVD risk." },
+                                                    { t: "Safe level of intake", d: "Highest level with confidence in absence of adverse effects when UL can't be set." },
+                                                    { t: "Macronutrient", d: "Fat, protein, carbohydrate needed in significant quantities for growth and health." },
+                                                    { t: "Micronutrient", d: "Vitamins and minerals required in tiny amounts for normal development." },
+                                                    { t: "Target population", d: "Healthy population defined by specific age range and gender (e.g., pregnant women)." }
+                                                ].map(item => (
+                                                    <div key={item.t} className="group">
+                                                        <dt className="text-xs font-black text-gray-900 group-hover:text-blue-600 transition-colors">{item.t}</dt>
+                                                        <dd className="text-[11px] text-gray-500 leading-relaxed mt-0.5">{item.d}</dd>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+
+                                        {/* ABBREVIAZIONI */}
+                                        <div className="bg-gray-50/50 p-6 rounded-2xl border border-gray-100">
+                                            <h5 className="text-[10px] font-black uppercase text-gray-400 tracking-widest mb-4 flex items-center gap-2">
+                                                <i className="ph-fill ph-text-aa text-lg"></i> Abbreviations
+                                            </h5>
+                                            <div className="grid grid-cols-2 sm:grid-cols-3 gap-y-3 gap-x-4">
+                                                {[
+                                                    { a: "ALA", d: "Alpha-linolenic acid" }, { a: "DFE", d: "Dietary folate equivalent" },
+                                                    { a: "DHA", d: "Docosahexaenoic acid" }, { a: "EPA", d: "Eicosapentaenoic acid" },
+                                                    { a: "SFA", d: "Saturated fatty acids" }, { a: "TFA", d: "Trans-fatty acids" },
+                                                    { a: "RE", d: "Retinol equivalent" }, { a: "NE", d: "Niacin equivalent" },
+                                                    { a: "PAL", d: "Physical activity level" }, { a: "bw", d: "body weight" },
+                                                    { a: "E%", d: "Energy intake %" }, { a: "ND / NA", d: "Not Defined / Applicable" }
+                                                ].map(abb => (
+                                                    <div key={abb.a} className="flex flex-col">
+                                                        <span className="text-[10px] font-black text-blue-600">{abb.a}</span>
+                                                        <span className="text-[9px] font-bold text-gray-400 truncate" title={abb.d}>{abb.d}</span>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                            <div className="mt-6 pt-6 border-t border-gray-200">
+                                                <p className="text-[9px] text-gray-400 italic leading-tight">
+                                                    * Reference values (DRVs) are based on EFSA (European Food Safety Authority) and LARN 2024 standards.
+                                                </p>
+                                            </div>
+                                        </div>
+
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* 3. GRIGLIA DINAMICA */}
+                            <div className="flex-1 overflow-y-auto p-8 custom-scrollbar relative z-0">
+                                
+                                {Object.keys(patientTargets).length === 0 ? (
+                                    <div className="p-12 border-2 border-dashed border-gray-200 rounded-3xl text-center text-gray-400 font-bold text-sm bg-white">
+                                        <i className="ph-thin ph-flask text-5xl mb-3 text-gray-300"></i><br/>
+                                        Nessun target trovato. Configura il Database.
+                                    </div>
+                                ) : (
+                                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
                                         {Object.entries(patientTargets).map(([key, ref]) => {
-                                            const rawVal = currentProfile[key] || 0;
-                                            const val = analysisTimeframe === 'week' ? rawVal * 7 : analysisTimeframe === 'meal' ? rawVal / 5 : rawVal; // Esempio pasto diviso 5
+                                            const val = (currentProfile[key] || 0) * multiplier;
                                             const target = ref.target * multiplier;
                                             const ul = ref.ul ? ref.ul * multiplier : null;
                                             const pct = Math.min((val / target) * 100, 100);
 
                                             let status = 'ok';
-                                            if (val < target * 0.75) status = 'low';
-                                            if (ul && val > ul) status = 'high';
+                                            let glowColor = 'bg-blue-500'; // Default acqua per lo status OK
+                                            let barColor = 'bg-blue-500';
+                                            let borderColor = 'border-transparent';
+
+                                            if (val < target * 0.75) { status = 'low'; glowColor = 'bg-amber-400'; barColor = 'bg-amber-400'; borderColor = 'border-amber-400'; }
+                                            if (ul && val > ul) { status = 'high'; glowColor = 'bg-red-500'; barColor = 'bg-red-500'; borderColor = 'border-red-500'; }
 
                                             return (
-                                                <div key={key} className={`bg-white p-5 rounded-2xl border ${status === 'low' ? 'border-amber-200 shadow-amber-100' : status === 'high' ? 'border-red-200 shadow-red-100' : 'border-gray-200'} shadow-sm relative overflow-hidden group`}>
-                                                    {status !== 'ok' && (
-                                                        <div className={`absolute top-0 right-0 w-12 h-12 flex items-start justify-end p-2 ${status === 'low' ? 'bg-amber-50 text-amber-500' : 'bg-red-50 text-red-500'} rounded-bl-3xl`}>
-                                                            <i className={`ph-fill ${status === 'low' ? 'ph-arrow-down' : 'ph-warning-octagon'} text-lg`}></i>
-                                                        </div>
-                                                    )}
-                                                    <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">{ref.name}</span>
-                                                    <div className="flex items-baseline gap-1 mb-3">
-                                                        <span className={`text-2xl font-black ${status === 'low' ? 'text-amber-600' : status === 'high' ? 'text-red-600' : 'text-gray-900'}`}>
+                                                <div key={key} className={`bg-white p-4 rounded-3xl shadow-[0_2px_10px_rgba(0,0,0,0.02)] border border-gray-100 border-b-4 ${status !== 'ok' ? borderColor : 'border-b-transparent'} hover:shadow-[0_15px_35px_rgba(0,0,0,0.08)] hover:-translate-y-1.5 transition-all duration-500 relative overflow-hidden flex flex-col group`}>
+                                                    
+                                                    {/* EFFETTO FLUIDO/ACQUA: Sfondo animato */}
+                                                    <div className={`absolute inset-0 bg-gradient-to-br from-transparent to-${glowColor.replace('bg-', '')}/10 opacity-0 group-hover:opacity-100 translate-y-8 group-hover:translate-y-0 transition-all duration-700 ease-out z-0 rounded-3xl scale-110 group-hover:scale-100 blur-xl`}></div>
+
+                                                    {/* Intestazione Card */}
+                                                    <div className="flex justify-between items-start mb-2 z-10 relative">
+                                                        <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest truncate pr-2 group-hover:text-gray-800 transition-colors duration-300" title={ref.name}>{ref.name}</span>
+                                                        {status !== 'ok' && (
+                                                            <i className={`ph-fill ${status === 'low' ? 'ph-warning text-amber-500' : 'ph-warning-octagon text-red-500'} animate-pulse drop-shadow-md`}></i>
+                                                        )}
+                                                    </div>
+
+                                                    {/* Valore e Unità */}
+                                                    <div className="flex items-baseline gap-1 z-10 relative mb-4">
+                                                        <span className={`text-3xl font-black tracking-tighter transition-colors duration-500 ${status === 'low' ? 'text-amber-500' : status === 'high' ? 'text-red-500' : 'text-gray-900 group-hover:text-blue-600'}`}>
                                                             {val.toFixed(1)}
                                                         </span>
-                                                        <span className="text-xs font-bold text-gray-400">{ref.unit}</span>
+                                                        <span className="text-[10px] font-bold text-gray-400 group-hover:text-blue-400/70 transition-colors">{ref.unit}</span>
                                                     </div>
                                                     
-                                                    {/* ProgressBar */}
-                                                    <div className="h-1.5 w-full bg-gray-100 rounded-full overflow-hidden mb-2 relative">
-                                                        <div className={`h-full transition-all ${status === 'low' ? 'bg-amber-400' : status === 'high' ? 'bg-red-500' : 'bg-green-500'}`} style={{ width: `${pct}%` }} />
-                                                    </div>
-                                                    
-                                                    <div className="flex justify-between items-center text-[9px] font-bold text-gray-400">
-                                                        <span>Target: {target.toFixed(1)}</span>
-                                                        {ul && <span className="text-red-400">Max: {ul.toFixed(1)}</span>}
+                                                    {/* Sezione Target e Grafico a Barra */}
+                                                    <div className="mt-auto z-10 relative">
+                                                        <div className="flex justify-between text-[9px] font-bold text-gray-400 mb-1.5 uppercase tracking-wider">
+                                                            <span>Trgt: {target.toFixed(2)} {ref.unit}</span>
+                                                            <span className={status === 'ok' ? 'text-blue-500' : ''}>{pct.toFixed(0)}%</span>
+                                                        </div>
+                                                        <div className="h-1.5 w-full bg-gray-100 rounded-full overflow-hidden relative shadow-inner">
+                                                            {/* Barra con effetto onda */}
+                                                            <div className={`h-full rounded-full transition-all duration-1000 ease-out ${barColor} group-hover:brightness-110`} style={{ width: `${pct}%` }} />
+                                                            {ul && <div className="absolute top-0 bottom-0 w-[2px] bg-red-500 z-10 shadow-sm" style={{ left: `${Math.min((ul/target)*100, 100)}%` }} title={`Limite: ${ul.toFixed(1)} ${ref.unit}`} />}
+                                                        </div>
                                                     </div>
                                                 </div>
                                             );
                                         })}
                                     </div>
-                                </div>
+                                )}
 
-                                {/* SEZIONE B: TUTTI GLI ALTRI COMPONENTI DEL DATABASE ALIMENTI */}
-                                <div>
-                                    <h4 className="text-sm font-black text-gray-400 uppercase tracking-widest mb-4 flex items-center gap-2">
-                                        <i className="ph-fill ph-dots-three-circle text-gray-500"></i> Altri Componenti Analizzati
-                                    </h4>
-                                    <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
-                                        {Object.entries(currentProfile).filter(([k, v]) => v > 0 && !patientTargets[k]).map(([key, val]) => (
-                                            <div key={key} className="bg-white p-3 rounded-xl border border-gray-100 shadow-sm flex flex-col">
-                                                <span className="text-[9px] font-bold text-gray-400 uppercase tracking-wider truncate" title={key}>{key.replace(/_/g, ' ')}</span>
-                                                <span className="text-sm font-black text-gray-800 mt-1">
-                                                    {(analysisTimeframe === 'week' ? val * 7 : val).toFixed(2)}
-                                                </span>
-                                            </div>
-                                        ))}
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                );
-            })()}
-
-            {/* --- GESTIONALE DATABASE EFSA (DRVs) --- */}
-            {isDrvEditorOpen && (
-                <div className="fixed inset-0 z-[14000] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-5xl h-[80vh] flex flex-col overflow-hidden">
-                        <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50">
-                            <div>
-                                <h3 className="text-lg font-black text-gray-900">Database EFSA (DRVs)</h3>
-                                <span className="text-xs text-gray-500 font-bold">{drvDB.length} record presenti</span>
-                            </div>
-                            <div className="flex gap-2">
-                                <button onClick={() => drvFileInputRef.current.click()} className="px-4 py-2 bg-white border border-gray-200 rounded-xl text-xs font-bold hover:bg-gray-100">Importa JSON</button>
-                                <input type="file" ref={drvFileInputRef} accept=".json" style={{ display: 'none' }} onChange={e => {
-                                    const file = e.target.files[0];
-                                    if (file) {
-                                        const reader = new FileReader();
-                                        reader.onload = (evt) => { setDrvDB(JSON.parse(evt.target.result)); alert("DB Caricato!"); };
-                                        reader.readAsText(file);
-                                    }
-                                }} />
-                                <button onClick={() => setIsDrvEditorOpen(false)} className="w-10 h-10 rounded-full bg-gray-200 flex items-center justify-center"><i className="ph-bold ph-x"></i></button>
-                            </div>
-                        </div>
-                        <div className="flex-1 overflow-auto p-0">
-                            <table className="w-full text-left text-xs">
-                                <thead className="bg-gray-100 sticky top-0 font-black text-gray-500 uppercase tracking-wider">
-                                    <tr>
-                                        <th className="p-3">Nutrient</th>
-                                        <th className="p-3">Population</th>
-                                        <th className="p-3">Age / Gender</th>
-                                        <th className="p-3">PRI</th>
-                                        <th className="p-3">AI</th>
-                                        <th className="p-3">UL</th>
-                                        <th className="p-3">Azioni</th>
-                                    </tr>
-                                </thead>
-                                <tbody className="divide-y divide-gray-100">
-                                    {drvDB.map((row, idx) => (
-                                        <tr key={idx} className="hover:bg-gray-50">
-                                            <td className="p-3 font-bold text-gray-900">{row.Nutrient}</td>
-                                            <td className="p-3">{row["Target population"]}</td>
-                                            <td className="p-3">{row.Age} / {row.Gender}</td>
-                                            <td className="p-3">{row.PRI}</td>
-                                            <td className="p-3">{row.AI}</td>
-                                            <td className="p-3 text-red-500">{row.UL}</td>
-                                            <td className="p-3">
-                                                <button onClick={() => {
-                                                    const newDB = [...drvDB];
-                                                    newDB.splice(idx, 1);
-                                                    setDrvDB(newDB);
-                                                }} className="text-red-500 hover:text-red-700 font-bold"><i className="ph-bold ph-trash"></i></button>
-                                            </td>
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {/* --- MODALE 1: ANALISI CLINICA AVANZATA --- */}
-            {isAnalysisOpen && (() => {
-                const patientTargets = getPatientTargets();
-                const profileResult = analyzeCompleteBioProfile();
-                const currentProfile = profileResult.data;
-                
-                // Moltiplicatori dinamici per Pasto/Giorno/Settimana
-                let multiplier = 1;
-                if (analysisTimeframe === 'week') multiplier = 7;
-                if (analysisTimeframe === 'meal') multiplier = 1 / (profileResult.avgMealsPerDay || 4); // Divide per il numero medio di pasti
-
-                return (
-                    <div className="fixed inset-0 z-[13000] flex items-center justify-center p-4 bg-black/80 backdrop-blur-xl fade-enter">
-                        <div className="bg-white rounded-[32px] shadow-2xl w-full max-w-7xl h-[95vh] flex flex-col overflow-hidden border border-white/20">
-                            
-                            {/* PANNELLINO MINIMAL PAZIENTE */}
-                            <div className="bg-gray-900 text-white p-4 shrink-0 flex items-center justify-between">
-                                <div className="flex items-center gap-6">
-                                    <div className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center border border-white/20">
-                                        <i className="ph-fill ph-user text-xl"></i>
-                                    </div>
-                                    <div className="flex items-center gap-4 text-xs">
-                                        <div><span className="text-gray-400 block text-[9px] uppercase font-bold tracking-wider">Paziente</span><span className="font-black text-sm">{patientProfile.name}</span></div>
-                                        <div className="w-px h-6 bg-white/20"></div>
-                                        <div><span className="text-gray-400 block text-[9px] uppercase font-bold tracking-wider">Bio</span><span className="font-bold">{patientProfile.age} anni, {patientProfile.gender === 'Male' ? 'Uomo' : 'Donna'}, {patientProfile.weight}kg</span></div>
-                                        <div className="w-px h-6 bg-white/20"></div>
-                                        <div>
-                                            <span className="text-gray-400 block text-[9px] uppercase font-bold tracking-wider">Avvertenze Cliniche</span>
-                                            <div className="flex gap-2 mt-0.5">
-                                                {patientProfile.allergies.map(a => <span key={a} className="bg-red-500/20 text-red-300 px-2 py-0.5 rounded text-[9px] font-bold border border-red-500/30">{a}</span>)}
-                                                {patientProfile.pathologies.map(p => <span key={p} className="bg-amber-500/20 text-amber-300 px-2 py-0.5 rounded text-[9px] font-bold border border-amber-500/30">{p}</span>)}
-                                                {patientProfile.notes && <span className="bg-blue-500/20 text-blue-300 px-2 py-0.5 rounded text-[9px] font-bold border border-blue-500/30 truncate max-w-[150px]">{patientProfile.notes}</span>}
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-                                <div className="flex gap-2">
-                                    <button onClick={() => setIsDrvEditorOpen(true)} className="px-4 py-2 bg-white/10 hover:bg-white/20 rounded-xl text-xs font-bold transition-colors flex items-center gap-2">
-                                        <i className="ph-bold ph-database"></i> Database EFSA (DRV)
-                                    </button>
-                                    <button onClick={() => setIsAnalysisOpen(false)} className="w-10 h-10 bg-white/10 hover:bg-red-500/20 hover:text-red-400 rounded-xl flex items-center justify-center transition-colors">
-                                        <i className="ph-bold ph-x"></i>
-                                    </button>
-                                </div>
-                            </div>
-
-                            {/* BARRA STRUMENTI & TIMEFRAME */}
-                            <div className="px-8 py-4 bg-white border-b border-gray-100 flex justify-between items-center shrink-0 z-10 shadow-sm">
-                                <div>
-                                    <h3 className="text-xl font-black text-gray-900">Report Nutrizionale Molecolare</h3>
-                                    <p className="text-xs font-bold text-gray-400 uppercase">Incrocio dati Database Alimenti e DRV Popolazione</p>
-                                </div>
-                                <div className="flex bg-gray-100 p-1 rounded-xl">
-                                    {['meal', 'day', 'week'].map(tf => (
-                                        <button 
-                                            key={tf} onClick={() => setAnalysisTimeframe(tf)}
-                                            className={`px-6 py-2 rounded-lg text-xs font-bold transition-all ${analysisTimeframe === tf ? 'bg-white text-black shadow-sm scale-100' : 'text-gray-500 hover:bg-gray-200'}`}
-                                        >
-                                            {tf === 'meal' ? 'Singolo Pasto (Media)' : tf === 'day' ? 'Media Giornaliera' : 'Totale Settimanale'}
-                                        </button>
-                                    ))}
-                                </div>
-                            </div>
-
-                            {/* GRIGLIA CARD DINAMICHE */}
-                            <div className="flex-1 overflow-y-auto p-8 bg-gray-50/50 custom-scrollbar">
-                                
-                                {/* COMPONENTI CON TARGET (EFSA) */}
-                                <div className="mb-10">
-                                    <h4 className="text-sm font-black text-gray-400 uppercase tracking-widest mb-4 flex items-center gap-2">
-                                        <i className="ph-fill ph-target text-green-500 text-lg"></i> Micronutrienti Tracciati
-                                    </h4>
-                                    {Object.keys(patientTargets).length === 0 ? (
-                                        <div className="p-8 border-2 border-dashed border-gray-200 rounded-2xl text-center text-gray-400 font-bold text-sm">
-                                            Nessun target EFSA trovato. Assicurati di aver importato il database in alto a destra.
-                                        </div>
-                                    ) : (
-                                        <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-4">
-                                            {Object.entries(patientTargets).map(([key, ref]) => {
-                                                const val = (currentProfile[key] || 0) * multiplier;
-                                                const target = ref.target * multiplier;
-                                                const ul = ref.ul ? ref.ul * multiplier : null;
-                                                const pct = Math.min((val / target) * 100, 100);
-
-                                                let status = 'ok';
-                                                let statusColor = 'text-green-500';
-                                                let bgColor = 'bg-green-500';
-                                                let alertBox = null;
-
-                                                if (val < target * 0.75) {
-                                                    status = 'low'; statusColor = 'text-amber-500'; bgColor = 'bg-amber-400';
-                                                    alertBox = "Deficit Rilevato";
-                                                }
-                                                if (ul && val > ul) {
-                                                    status = 'high'; statusColor = 'text-red-500'; bgColor = 'bg-red-500';
-                                                    alertBox = "Superamento UL (Tossicità)";
-                                                }
-
-                                                return (
-                                                    <div key={key} className={`bg-white p-5 rounded-2xl border ${status === 'low' ? 'border-amber-200' : status === 'high' ? 'border-red-200' : 'border-gray-200'} shadow-sm relative overflow-hidden group hover:shadow-lg transition-all`}>
-                                                        {status !== 'ok' && (
-                                                            <div className={`absolute top-0 right-0 w-8 h-8 flex items-start justify-end p-2 ${status === 'low' ? 'bg-amber-50 text-amber-500' : 'bg-red-50 text-red-500'} rounded-bl-2xl`}>
-                                                                <i className={`ph-fill ${status === 'low' ? 'ph-arrow-down' : 'ph-warning-octagon'}`}></i>
+                                {/* ALTRI COMPONENTI RAGGRUPPATI (ESPANSIONE HTML <details>) */}
+                                {Object.keys(groupedMicros).length > 0 && (
+                                    <details className="mt-12 text-center group/exp pb-10">
+                                        <summary className="inline-flex items-center gap-2 text-xs font-bold text-gray-500 hover:text-gray-900 bg-white px-6 py-3 rounded-full shadow-sm border border-gray-200 cursor-pointer list-none transition-all hover:shadow-lg hover:-translate-y-1 outline-none relative overflow-hidden">
+                                            <div className="absolute inset-0 bg-blue-50/50 translate-y-full group-hover/exp:translate-y-0 transition-transform duration-500 ease-out z-0"></div>
+                                            <i className="ph-bold ph-caret-down text-lg group-open/exp:rotate-180 transition-transform duration-500 z-10 relative"></i>
+                                            <span className="z-10 relative">Esplora altri {otherMicros.length} Componenti Minori</span>
+                                        </summary>
+                                        
+                                        <div className="mt-10 text-left animate-fade-in-up space-y-8">
+                                            {Object.entries(groupedMicros).map(([catName, catData]) => (
+                                                <div key={catName} className="bg-white/50 p-6 rounded-[32px] border border-gray-200/50 shadow-sm">
+                                                    <h5 className={`text-xs font-black uppercase tracking-widest mb-4 flex items-center gap-2 ${catData.color}`}>
+                                                        <div className={`w-8 h-8 rounded-full flex items-center justify-center bg-white shadow-sm border border-gray-100`}>
+                                                            <i className={`ph-fill ${catData.icon} text-lg`}></i>
+                                                        </div>
+                                                        {catName}
+                                                    </h5>
+                                                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
+                                                        {catData.items.map((item) => (
+                                                            <div key={item.key} className="bg-white p-3 rounded-2xl border border-gray-100 shadow-[0_2px_8px_rgba(0,0,0,0.02)] flex flex-col hover:shadow-[0_8px_20px_rgba(0,0,0,0.06)] hover:-translate-y-1 transition-all duration-500 relative overflow-hidden group/mini">
+                                                                
+                                                                {/* EFFETTO FLUIDO MINI-CARD */}
+                                                                <div className="absolute inset-0 bg-gradient-to-tr from-blue-100/40 via-blue-50/10 to-transparent opacity-0 group-hover/mini:opacity-100 scale-150 group-hover/mini:scale-100 transition-all duration-700 ease-out z-0"></div>
+                                                                
+                                                                <span className="text-[9px] font-black text-gray-400 uppercase tracking-wider truncate transition-colors duration-300 group-hover/mini:text-gray-800 relative z-10" title={item.key.replace(/_/g, ' ')}>
+                                                                    {item.key.replace(/_/g, ' ')}
+                                                                </span>
+                                                                <span className="text-sm font-black text-gray-800 mt-1 relative z-10 group-hover/mini:text-blue-600 transition-colors duration-300">
+                                                                    {(item.val * multiplier).toFixed(2)}
+                                                                </span>
                                                             </div>
-                                                        )}
-                                                        <span className="text-[10px] font-black text-gray-400 uppercase tracking-wider block mb-1">{ref.name}</span>
-                                                        <div className="flex items-baseline gap-1 mb-3">
-                                                            <span className={`text-3xl font-black ${statusColor}`}>
-                                                                {val.toFixed(1)}
-                                                            </span>
-                                                            <span className="text-xs font-bold text-gray-400">{ref.unit}</span>
-                                                        </div>
-                                                        
-                                                        {/* ProgressBar con limite superiore visivo */}
-                                                        <div className="h-2 w-full bg-gray-100 rounded-full overflow-hidden mb-2 relative">
-                                                            <div className={`h-full transition-all duration-1000 ${bgColor}`} style={{ width: `${pct}%` }} />
-                                                            {ul && <div className="absolute top-0 bottom-0 border-l-2 border-red-500 z-10" style={{ left: `${Math.min((ul/target)*100, 100)}%` }} title="Upper Level" />}
-                                                        </div>
-                                                        
-                                                        <div className="flex justify-between items-center text-[9px] font-black uppercase text-gray-400">
-                                                            <span>Target: {target.toFixed(1)}</span>
-                                                            {ul && <span className="text-red-400">Max: {ul.toFixed(1)}</span>}
-                                                        </div>
-
-                                                        {alertBox && (
-                                                            <div className={`mt-3 p-2 rounded-lg text-[10px] font-bold ${status === 'low' ? 'bg-amber-50 text-amber-700' : 'bg-red-50 text-red-700'}`}>
-                                                                {alertBox}
-                                                            </div>
-                                                        )}
+                                                        ))}
                                                     </div>
-                                                );
-                                            })}
+                                                </div>
+                                            ))}
                                         </div>
-                                    )}
-                                </div>
+                                    </details>
+                                )}
 
-                                {/* ALTRI COMPONENTI DEL DATABASE (Es. Aminoacidi, Grassi specifici) */}
-                                <div>
-                                    <h4 className="text-sm font-black text-gray-400 uppercase tracking-widest mb-4 flex items-center gap-2">
-                                        <i className="ph-fill ph-dots-three-circle text-gray-500 text-lg"></i> Altri Componenti Tracciati
-                                    </h4>
-                                    <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
-                                        {Object.entries(currentProfile).filter(([k, v]) => v > 0 && !patientTargets[k] && k !== 'energy_kcal').map(([key, val]) => (
-                                            <div key={key} className="bg-white p-3 rounded-xl border border-gray-100 shadow-sm flex flex-col hover:border-gray-300 transition-colors">
-                                                <span className="text-[9px] font-bold text-gray-400 uppercase tracking-wider truncate" title={key}>{key.replace(/_/g, ' ')}</span>
-                                                <span className="text-sm font-black text-gray-800 mt-1">
-                                                    {(val * multiplier).toFixed(2)}
-                                                </span>
-                                            </div>
-                                        ))}
-                                    </div>
-                                </div>
                             </div>
                         </div>
                     </div>
                 );
             })()}
 
+            {/* --- MODALE 2: EDITOR DRV (EFSA) UI/UX PREMIUM --- */}
             {/* --- MODALE 2: EDITOR DRV (EFSA) UI/UX PREMIUM --- */}
             {isDrvEditorOpen && (() => {
                 // Filtro di ricerca in tempo reale
@@ -3671,36 +3642,36 @@ const HistoryIcon = () => (
                 );
 
                 return (
-                    <div className="fixed inset-0 z-[14000] flex items-center justify-center p-4 lg:p-6 bg-black/60 backdrop-blur-md fade-enter">
-                        <div className="bg-[#FAFAFC] rounded-[32px] shadow-2xl w-full max-w-6xl h-[90vh] flex flex-col overflow-hidden border border-white/20">
+                    <div className="fixed inset-0 z-[14000] flex items-center justify-center p-4 lg:p-6 bg-black/60 backdrop-blur-xl fade-enter">
+                        <div className="bg-[#FAFAFC] rounded-[36px] shadow-2xl w-full max-w-6xl h-[90vh] flex flex-col overflow-hidden border border-white/20">
                             
                             {/* HEADER FLUTTUANTE */}
-                            <div className="p-6 bg-white border-b border-gray-100 shrink-0 flex flex-col md:flex-row justify-between items-center gap-4 z-10 shadow-sm">
+                            <div className="p-6 bg-white border-b border-gray-100 shrink-0 flex flex-col md:flex-row justify-between items-center gap-4 z-10 shadow-sm rounded-t-[36px]">
                                 <div className="flex items-center gap-4">
-                                    <div className="w-12 h-12 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center shadow-inner border border-blue-100">
-                                        <i className="ph-bold ph-database text-2xl"></i>
+                                    <div className="w-12 h-12 bg-gradient-to-br from-blue-50 to-blue-100 text-blue-600 rounded-[18px] flex items-center justify-center shadow-inner border border-blue-200">
+                                        <i className="ph-bold ph-database text-2xl drop-shadow-sm"></i>
                                     </div>
                                     <div>
                                         <h3 className="text-xl font-black text-gray-900 tracking-tight">Libreria DRV (EFSA)</h3>
-                                        <span className="text-xs font-bold text-gray-400 uppercase tracking-widest">{drvDB.length} record nel database</span>
+                                        <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest bg-gray-100 px-2 py-0.5 rounded-md mt-1 inline-block">{drvDB.length} record nel database</span>
                                     </div>
                                 </div>
                                 
                                 {/* BARRA DI RICERCA */}
-                                <div className="relative w-full md:w-72">
-                                    <i className="ph-bold ph-magnifying-glass absolute left-4 top-1/2 -translate-y-1/2 text-gray-400"></i>
+                                <div className="relative w-full md:w-80 group">
+                                    <i className="ph-bold ph-magnifying-glass absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 group-focus-within:text-blue-500 transition-colors"></i>
                                     <input 
                                         type="text" 
                                         placeholder="Cerca nutriente o popolazione..." 
                                         value={drvSearch}
                                         onChange={(e) => setDrvSearch(e.target.value)}
-                                        className="w-full pl-11 pr-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm font-bold focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none transition-all"
+                                        className="w-full pl-11 pr-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm font-bold focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all placeholder:text-gray-400 placeholder:font-medium"
                                     />
                                 </div>
 
                                 <div className="flex gap-2">
-                                    <button onClick={() => drvFileInputRef.current.click()} className="px-4 py-2.5 bg-white border border-gray-200 rounded-xl text-xs font-bold hover:bg-gray-50 transition-all flex items-center gap-2 shadow-sm group">
-                                        <i className="ph-bold ph-upload-simple group-hover:text-blue-500 transition-colors text-lg"></i> Importa JSON
+                                    <button onClick={() => drvFileInputRef.current.click()} className="px-4 py-2.5 bg-white border border-gray-200 rounded-xl text-xs font-bold hover:bg-gray-50 transition-all flex items-center gap-2 shadow-sm group text-gray-700 hover:text-gray-900">
+                                        <i className="ph-bold ph-upload-simple group-hover:text-blue-500 transition-colors text-lg"></i> <span className="hidden sm:block">Importa JSON</span>
                                     </button>
                                     <input type="file" ref={drvFileInputRef} accept=".json" style={{ display: 'none' }} onChange={e => {
                                         const file = e.target.files[0];
@@ -3714,11 +3685,13 @@ const HistoryIcon = () => (
                                     <button onClick={() => {
                                         const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(drvDB, null, 2));
                                         const a = document.createElement('a'); a.href = dataStr; a.download = "drv_custom.json"; a.click();
-                                    }} className="px-4 py-2.5 bg-black text-white border border-black rounded-xl text-xs font-bold hover:bg-gray-800 transition-all flex items-center gap-2 shadow-md">
-                                        <i className="ph-bold ph-download-simple text-lg"></i> Esporta DB
+                                    }} className="px-4 py-2.5 bg-gray-900 text-white border border-gray-900 rounded-xl text-xs font-bold hover:bg-gray-800 transition-all flex items-center gap-2 shadow-md hover:shadow-lg">
+                                        <i className="ph-bold ph-download-simple text-lg"></i> <span className="hidden sm:block">Esporta DB</span>
                                     </button>
 
-                                    <button onClick={() => { setIsDrvEditorOpen(false); setDrvSearch(''); }} className="w-10 h-10 rounded-xl bg-gray-100 hover:bg-red-100 hover:text-red-600 text-gray-500 flex items-center justify-center ml-2 transition-colors">
+                                    <div className="w-px h-10 bg-gray-200 mx-2 hidden sm:block"></div>
+
+                                    <button onClick={() => { setIsDrvEditorOpen(false); setDrvSearch(''); }} className="w-10 h-10 rounded-xl bg-gray-100 hover:bg-red-50 hover:text-red-500 text-gray-500 flex items-center justify-center transition-colors">
                                         <i className="ph-bold ph-x text-lg"></i>
                                     </button>
                                 </div>
@@ -3726,58 +3699,61 @@ const HistoryIcon = () => (
 
                             {/* TABELLA DATI IN LINEA */}
                             <div className="flex-1 overflow-auto p-6 bg-[#FAFAFC] custom-scrollbar">
-                                <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+                                <div className="bg-white rounded-[24px] border border-gray-100 shadow-sm overflow-hidden">
                                     {filteredDrv.length === 0 ? (
-                                        <div className="p-12 text-center text-gray-400">
-                                            <i className="ph-thin ph-magnifying-glass text-5xl mb-3"></i>
-                                            <p className="font-bold text-sm">Nessun record trovato {drvSearch ? `per "${drvSearch}"` : 'nel database'}.</p>
+                                        <div className="p-16 text-center flex flex-col items-center justify-center h-full">
+                                            <div className="w-20 h-20 bg-gray-50 rounded-full flex items-center justify-center mb-4 border border-gray-100">
+                                                <i className="ph-thin ph-magnifying-glass text-4xl text-gray-400"></i>
+                                            </div>
+                                            <p className="font-bold text-gray-500 text-sm">Nessun record trovato {drvSearch ? `per "${drvSearch}"` : 'nel database'}.</p>
                                         </div>
                                     ) : (
-                                        <table className="w-full text-left text-xs">
-                                            <thead className="bg-gray-50 sticky top-0 z-10 border-b border-gray-200 shadow-sm">
+                                        <table className="w-full text-left text-xs border-collapse">
+                                            <thead className="bg-white/80 backdrop-blur-md sticky top-0 z-10 border-b border-gray-100">
                                                 <tr>
-                                                    <th className="p-4 font-black text-gray-400 uppercase tracking-widest text-[10px]">Nutrient</th>
-                                                    <th className="p-4 font-black text-gray-400 uppercase tracking-widest text-[10px]">Population</th>
-                                                    <th className="p-4 font-black text-gray-400 uppercase tracking-widest text-[10px]">Age / Gender</th>
-                                                    <th className="p-4 font-black text-green-600 uppercase tracking-widest text-[10px]">PRI / AR</th>
-                                                    <th className="p-4 font-black text-blue-600 uppercase tracking-widest text-[10px]">AI</th>
+                                                    <th className="p-4 font-black text-gray-400 uppercase tracking-widest text-[10px]">Nutriente</th>
+                                                    <th className="p-4 font-black text-gray-400 uppercase tracking-widest text-[10px]">Popolazione</th>
+                                                    <th className="p-4 font-black text-gray-400 uppercase tracking-widest text-[10px] text-center">Età / Genere</th>
+                                                    <th className="p-4 font-black text-green-500 uppercase tracking-widest text-[10px]">PRI / AR</th>
+                                                    <th className="p-4 font-black text-blue-500 uppercase tracking-widest text-[10px]">AI</th>
                                                     <th className="p-4 font-black text-red-500 uppercase tracking-widest text-[10px]">UL (Max)</th>
-                                                    <th className="p-4 font-black text-gray-400 uppercase tracking-widest text-[10px] text-center">Azioni</th>
+                                                    <th className="p-4 font-black text-gray-400 uppercase tracking-widest text-[10px] text-center w-16"></th>
                                                 </tr>
                                             </thead>
-                                            <tbody className="divide-y divide-gray-100">
+                                            <tbody className="divide-y divide-gray-50">
                                                 {filteredDrv.map((row, idx) => {
                                                     // Troviamo l'indice reale nel database originale per le modifiche
                                                     const realIdx = drvDB.indexOf(row);
                                                     return (
-                                                        <tr key={realIdx} className="hover:bg-blue-50/30 transition-colors group">
+                                                        <tr key={realIdx} className="hover:bg-blue-50/20 transition-colors group">
                                                             <td className="p-2">
-                                                                <input className="w-full bg-transparent border border-transparent hover:border-gray-200 focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-100 rounded-lg px-3 py-2 font-bold text-gray-900 outline-none transition-all truncate" value={row.Nutrient || ''} onChange={e => { const ndb = [...drvDB]; ndb[realIdx].Nutrient = e.target.value; setDrvDB(ndb); }} title={row.Nutrient}/>
+                                                                <input className="w-full bg-transparent border border-transparent hover:border-gray-200 focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 rounded-lg px-3 py-2 font-bold text-gray-900 outline-none transition-all truncate" value={row.Nutrient || ''} onChange={e => { const ndb = [...drvDB]; ndb[realIdx].Nutrient = e.target.value; setDrvDB(ndb); }} title={row.Nutrient}/>
                                                             </td>
                                                             <td className="p-2">
-                                                                <input className="w-full bg-transparent border border-transparent hover:border-gray-200 focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-100 rounded-lg px-3 py-2 font-medium text-gray-600 outline-none transition-all truncate" value={row["Target population"] || ''} onChange={e => { const ndb = [...drvDB]; ndb[realIdx]["Target population"] = e.target.value; setDrvDB(ndb); }} title={row["Target population"]} />
+                                                                <input className="w-full bg-transparent border border-transparent hover:border-gray-200 focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 rounded-lg px-3 py-2 font-medium text-gray-600 outline-none transition-all truncate" value={row["Target population"] || ''} onChange={e => { const ndb = [...drvDB]; ndb[realIdx]["Target population"] = e.target.value; setDrvDB(ndb); }} title={row["Target population"]} />
                                                             </td>
                                                             <td className="p-2">
                                                                 <div className="flex gap-1">
-                                                                    <input className="w-1/2 bg-transparent border border-transparent hover:border-gray-200 focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-100 rounded-lg px-2 py-2 font-medium text-gray-600 outline-none transition-all text-center" value={row.Age || ''} onChange={e => { const ndb = [...drvDB]; ndb[realIdx].Age = e.target.value; setDrvDB(ndb); }} placeholder="Age" />
-                                                                    <input className="w-1/2 bg-transparent border border-transparent hover:border-gray-200 focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-100 rounded-lg px-2 py-2 font-medium text-gray-600 outline-none transition-all text-center" value={row.Gender || ''} onChange={e => { const ndb = [...drvDB]; ndb[realIdx].Gender = e.target.value; setDrvDB(ndb); }} placeholder="Gender" />
+                                                                    <input className="w-1/2 bg-transparent border border-transparent hover:border-gray-200 focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 rounded-lg px-2 py-2 font-medium text-gray-600 outline-none transition-all text-center" value={row.Age || ''} onChange={e => { const ndb = [...drvDB]; ndb[realIdx].Age = e.target.value; setDrvDB(ndb); }} placeholder="Age" />
+                                                                    <span className="text-gray-300 self-center">/</span>
+                                                                    <input className="w-1/2 bg-transparent border border-transparent hover:border-gray-200 focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 rounded-lg px-2 py-2 font-medium text-gray-600 outline-none transition-all text-center" value={row.Gender || ''} onChange={e => { const ndb = [...drvDB]; ndb[realIdx].Gender = e.target.value; setDrvDB(ndb); }} placeholder="Gender" />
                                                                 </div>
                                                             </td>
-                                                            <td className="p-2">
-                                                                <input className="w-full bg-transparent border border-transparent hover:border-green-200 focus:bg-white focus:border-green-500 focus:ring-2 focus:ring-green-100 rounded-lg px-3 py-2 font-black text-green-600 outline-none transition-all" value={row.PRI || row.AR || ''} onChange={e => { const ndb = [...drvDB]; if(row.PRI !== undefined) ndb[realIdx].PRI = e.target.value; else ndb[realIdx].AR = e.target.value; setDrvDB(ndb); }} placeholder="ND" />
+                                                            <td className="p-2 relative group/pri">
+                                                                <input className="w-full bg-transparent border border-transparent hover:border-green-200 focus:bg-white focus:border-green-500 focus:ring-4 focus:ring-green-500/10 rounded-lg px-3 py-2 font-black text-green-600 outline-none transition-all" value={row.PRI || row.AR || ''} onChange={e => { const ndb = [...drvDB]; if(row.PRI !== undefined) ndb[realIdx].PRI = e.target.value; else ndb[realIdx].AR = e.target.value; setDrvDB(ndb); }} placeholder="ND" />
                                                             </td>
-                                                            <td className="p-2">
-                                                                <input className="w-full bg-transparent border border-transparent hover:border-blue-200 focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-100 rounded-lg px-3 py-2 font-black text-blue-600 outline-none transition-all" value={row.AI || ''} onChange={e => { const ndb = [...drvDB]; ndb[realIdx].AI = e.target.value; setDrvDB(ndb); }} placeholder="ND" />
+                                                            <td className="p-2 relative group/ai">
+                                                                <input className="w-full bg-transparent border border-transparent hover:border-blue-200 focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 rounded-lg px-3 py-2 font-black text-blue-600 outline-none transition-all" value={row.AI || ''} onChange={e => { const ndb = [...drvDB]; ndb[realIdx].AI = e.target.value; setDrvDB(ndb); }} placeholder="ND" />
                                                             </td>
-                                                            <td className="p-2">
-                                                                <input className="w-full bg-transparent border border-transparent hover:border-red-200 focus:bg-white focus:border-red-500 focus:ring-2 focus:ring-red-100 rounded-lg px-3 py-2 font-black text-red-500 outline-none transition-all" value={row.UL || ''} onChange={e => { const ndb = [...drvDB]; ndb[realIdx].UL = e.target.value; setDrvDB(ndb); }} placeholder="ND" />
+                                                            <td className="p-2 relative group/ul">
+                                                                <input className="w-full bg-transparent border border-transparent hover:border-red-200 focus:bg-white focus:border-red-500 focus:ring-4 focus:ring-red-500/10 rounded-lg px-3 py-2 font-black text-red-500 outline-none transition-all" value={row.UL || ''} onChange={e => { const ndb = [...drvDB]; ndb[realIdx].UL = e.target.value; setDrvDB(ndb); }} placeholder="ND" />
                                                             </td>
-                                                            <td className="p-2 text-center">
+                                                            <td className="p-2 text-center w-16">
                                                                 <button onClick={() => {
                                                                     if(window.confirm("Eliminare definitivamente questo record?")) {
                                                                         const newDB = [...drvDB]; newDB.splice(realIdx, 1); setDrvDB(newDB);
                                                                     }
-                                                                }} className="w-8 h-8 rounded-lg bg-white border border-gray-200 text-gray-400 hover:bg-red-50 hover:text-red-600 hover:border-red-200 font-bold transition-all shadow-sm opacity-0 group-hover:opacity-100">
+                                                                }} className="w-8 h-8 rounded-lg bg-white border border-gray-200 text-gray-400 hover:bg-red-50 hover:text-red-600 hover:border-red-200 font-bold transition-all shadow-sm opacity-0 group-hover:opacity-100 flex items-center justify-center mx-auto">
                                                                     <i className="ph-bold ph-trash"></i>
                                                                 </button>
                                                             </td>
@@ -3791,20 +3767,21 @@ const HistoryIcon = () => (
                             </div>
 
                             {/* FOOTER PER AGGIUNTA MANUALE */}
-                            <div className="p-4 bg-white border-t border-gray-100 flex justify-center z-10 shrink-0 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.02)]">
+                            <div className="p-4 bg-white border-t border-gray-100 flex justify-center z-10 shrink-0 shadow-[0_-4px_15px_-3px_rgba(0,0,0,0.05)] rounded-b-[36px]">
                                 <button onClick={() => {
                                     setDrvDB([{ Nutrient: "Nuovo Nutriente", "Target population": "Adults", Age: "18-39", Gender: "All", PRI: "10 mg/day", AI: "ND", UL: "ND" }, ...drvDB]);
-                                    // Resetta la ricerca se stai aggiungendo un nuovo record, così lo vedi subito in cima
                                     setDrvSearch('');
-                                }} className="px-6 py-3 border border-gray-200 bg-gray-50 text-gray-700 rounded-xl text-xs font-bold hover:bg-gray-100 hover:border-gray-300 transition-all flex items-center gap-2">
-                                    <i className="ph-bold ph-plus text-lg"></i> Crea Nuova Regola DRV Manuale
+                                }} className="px-6 py-3 border border-gray-200 bg-gray-50 text-gray-700 rounded-2xl text-xs font-bold hover:bg-white hover:border-gray-300 hover:shadow-md transition-all flex items-center gap-2 group">
+                                    <div className="w-6 h-6 rounded-full bg-white border border-gray-200 flex items-center justify-center group-hover:border-blue-300 group-hover:text-blue-500 transition-colors">
+                                        <i className="ph-bold ph-plus"></i>
+                                    </div>
+                                    Crea Nuova Regola DRV Manuale
                                 </button>
                             </div>
                         </div>
                     </div>
                 );
             })()}
-
             
         </div>
     );
