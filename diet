@@ -946,13 +946,15 @@ const HistoryIcon = () => (
     };
 
     // --- STATI PER DASHBOARD E MODALE SMART ---
-    const [isSmartOpen, setIsSmartOpen] = useState(false);
-    const [smartConfig, setSmartConfig] = useState({ 
-        type: 'bar',        // 'bar', 'pie', 'line', 'mixed', '3d', 'radar'
-        metric: 'kcal',     // 'kcal', 'macro', 'p', 'c', 'f', 'weight'
-        scope: 'activeDay', // 'activeDay', 'allDays'
-        comment: '' 
+    const [smartConfig, setSmartConfig] = useState({
+    type: 'bar',
+    metric: 'kcal',          // vedi METRIC_CATALOG per tutte le opzioni
+    scope: 'activeDay',
+    comment: '',
+    showTarget: true,        // NUOVO: mostra linea target EFSA/DRV
     });
+    const [isSmartOpen, setIsSmartOpen] = useState(false);
+    
 
    
     
@@ -970,134 +972,405 @@ const HistoryIcon = () => (
     const plotRef = useRef(null);
 
     useEffect(() => {
-        if (!isSmartOpen || !window.Plotly || !plotRef.current) return;
-
-        // 1. GESTIONE DELLO SCOPE E AGGREGAZIONE DATI
-        let labels = [];
-        let dataMap = { kcal: [], p: [], c: [], f: [], weight: [] };
-
-        if (smartConfig.scope === 'activeDay') {
-            if (!activeDay) return;
-            const meals = activeDay.meals || [];
-            labels = meals.map((m, i) => m.title || `Pasto ${i + 1}`);
-            
-            dataMap.kcal = meals.map(m => calculateTotals(m.items).kcal);
-            dataMap.p = meals.map(m => calculateTotals(m.items).p);
-            dataMap.c = meals.map(m => calculateTotals(m.items).c);
-            dataMap.f = meals.map(m => calculateTotals(m.items).f);
-            dataMap.weight = meals.map(m => m.items.reduce((acc, it) => acc + (Number(it.weight) || 0), 0));
-        } else {
-            labels = dietDays.map((d, i) => d.title || `Giorno ${i + 1}`);
-            
-            dietDays.forEach(day => {
-                const dayItems = day.meals.flatMap(m => m.items);
-                const dayTotals = calculateTotals(dayItems);
-                dataMap.kcal.push(dayTotals.kcal);
-                dataMap.p.push(dayTotals.p);
-                dataMap.c.push(dayTotals.c);
-                dataMap.f.push(dayTotals.f);
-                dataMap.weight.push(dayItems.reduce((acc, it) => acc + (Number(it.weight) || 0), 0));
-            });
+  if (!isSmartOpen || !window.Plotly || !plotRef.current) return;
+ 
+  const m = METRIC_CATALOG[smartConfig.metric] || METRIC_CATALOG['kcal'];
+  const patientTargets = getPatientTargets(); // usa la funzione già esistente
+ 
+  // ── Costruzione Labels & Dataset ─────────────────────────────────────────
+  let labels = [];
+  let sourceItems = []; // array di arrays-of-items per ogni label
+ 
+  if (smartConfig.scope === 'activeDay') {
+    if (!activeDay) return;
+    labels = activeDay.meals.map((meal, i) => meal.title || `Pasto ${i+1}`);
+    sourceItems = activeDay.meals.map(meal => meal.items);
+  } else {
+    labels = dietDays.map((d, i) => d.title || `Giorno ${i+1}`);
+    sourceItems = dietDays.map(day => day.meals.flatMap(m => m.items));
+  }
+ 
+  // ── Palette Colori Pro ────────────────────────────────────────────────────
+  const PALETTE = {
+    primary:   '#0A84FF',
+    green:     '#30D158',
+    gray:      '#636366',
+    orange:    '#FF9F0A',
+    red:       '#FF453A',
+    purple:    '#BF5AF2',
+    teal:      '#5AC8FA',
+    pink:      '#FF375F',
+    bg:        'rgba(0,0,0,0)',
+    grid:      'rgba(0,0,0,0.04)',
+    text:      '#1D1D1F',
+    subtext:   '#8E8E93',
+  };
+ 
+  const GROUP_COLORS = {
+    'Macro Base':        PALETTE.primary,
+    'Profilo Lipidico':  PALETTE.orange,
+    'Aminoacidi':        PALETTE.purple,
+    'Micronutrienti':    PALETTE.teal,
+    'Vitamine':          PALETTE.green,
+    'Bioattivi':         PALETTE.pink,
+    'Analisi DRV':       PALETTE.gray,
+  };
+  const barColor = GROUP_COLORS[m.group] || PALETTE.primary;
+ 
+  // ── Layout base ───────────────────────────────────────────────────────────
+  const baseLayout = {
+    autosize: true,
+    margin: { t: 50, l: 65, r: 65, b: 70 },
+    paper_bgcolor: 'transparent',
+    plot_bgcolor: 'transparent',
+    font: { family: '-apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif', color: PALETTE.subtext, size: 11 },
+    showlegend: true,
+    legend: {
+      orientation: 'h', y: -0.22, x: 0.5, xanchor: 'center',
+      bgcolor: 'rgba(255,255,255,0.9)',
+      bordercolor: 'rgba(0,0,0,0.05)', borderwidth: 1,
+      font: { size: 10, color: PALETTE.text }
+    },
+    xaxis: {
+      tickangle: labels.length > 5 ? -40 : 0,
+      gridcolor: PALETTE.grid,
+      zeroline: false,
+      showline: false,
+    },
+    yaxis: {
+      gridcolor: PALETTE.grid,
+      zeroline: false,
+      showline: false,
+    },
+  };
+ 
+  // ── Helpers ───────────────────────────────────────────────────────────────
+  const makeDRVLine = (targetVal, label, color = PALETTE.red) => ({
+    type: 'scatter', mode: 'lines', name: `Target ${label}`,
+    x: [...labels, labels[labels.length - 1]],
+    y: Array(labels.length + 1).fill(targetVal),
+    line: { color, width: 2, dash: 'dot' },
+    hoverinfo: 'name+y',
+  });
+ 
+  let plotData = [];
+  let layout = { ...baseLayout };
+ 
+  // ══════════════════════════════════════════════════════════════════════════
+  // ROUTING PER AGGREGATION SPECIALI (pannelli multi-serie)
+  // ══════════════════════════════════════════════════════════════════════════
+ 
+  // ── PANNELLO LIPIDICO ─────────────────────────────────────────────────────
+  if (m.aggregation === 'lipid_panel') {
+    const lipidKeys = [
+      { key: 'Saturated_fatty_acids',        name: 'SFA',  color: PALETTE.red    },
+      { key: 'monounsaturated_fatty_acids',   name: 'MUFA', color: PALETTE.orange },
+      { key: 'polyunsaturated_fatty_acids',   name: 'PUFA', color: PALETTE.green  },
+      { key: 'C20:5_eicosapentaenoic_acid_EPA', name: 'EPA', color: PALETTE.teal  },
+      { key: 'C22:6_docosahexaenoic_acid_DHA',  name: 'DHA', color: PALETTE.primary},
+    ];
+    lipidKeys.forEach(lk => {
+      plotData.push({
+        x: labels, y: sourceItems.map(items => sumFieldFromDB(items, [lk.key])),
+        type: 'bar', name: lk.name,
+        marker: { color: lk.color, opacity: 0.85 },
+        text: sourceItems.map(items => sumFieldFromDB(items, [lk.key]).toFixed(2) + 'g'),
+        textposition: 'outside', textfont: { size: 9 },
+      });
+    });
+    layout.barmode = 'group';
+    layout.yaxis.title = { text: 'Acidi Grassi (g)' };
+  }
+ 
+  // ── PANNELLO AMINOACIDI ───────────────────────────────────────────────────
+  else if (m.aggregation === 'amino_panel') {
+    const aminoKeys = [
+      { key: 'leucine',      name: 'Leu',  color: PALETTE.purple  },
+      { key: 'isoleucine',   name: 'Ile',  color: '#9B59B6'       },
+      { key: 'valine',       name: 'Val',  color: '#8E44AD'       },
+      { key: 'lysine',       name: 'Lys',  color: PALETTE.teal    },
+      { key: 'threonine',    name: 'Thr',  color: PALETTE.orange  },
+      { key: 'methionine',   name: 'Met',  color: PALETTE.green   },
+      { key: 'phenylalanine',name: 'Phe',  color: PALETTE.primary },
+      { key: 'tryptophan',   name: 'Trp',  color: PALETTE.pink    },
+      { key: 'histidine',    name: 'His',  color: '#F39C12'       },
+    ];
+    aminoKeys.forEach(ak => {
+      const vals = sourceItems.map(items => sumFieldFromDB(items, [ak.key]));
+      if (vals.some(v => v > 0)) {
+        plotData.push({
+          x: labels, y: vals,
+          type: 'bar', name: ak.name,
+          marker: { color: ak.color, opacity: 0.85 },
+        });
+      }
+    });
+    layout.barmode = 'stack';
+    layout.yaxis.title = { text: 'Aminoacidi (g)' };
+  }
+ 
+  // ── PANNELLO MICRONUTRIENTI ───────────────────────────────────────────────
+  else if (m.aggregation === 'micro_panel') {
+    // Radar micronutrienti: ogni spoke = un minerale, valore = % del target EFSA
+    const microKeys = [
+      { key: 'calcium', name: 'Ca', drvKey: 'calcium' },
+      { key: 'iron', name: 'Fe', drvKey: 'iron' },
+      { key: 'magnesium', name: 'Mg', drvKey: 'magnesium' },
+      { key: 'zinc', name: 'Zn', drvKey: 'zinc' },
+      { key: 'potassium', name: 'K', drvKey: 'potassium' },
+      { key: 'selenium', name: 'Se', drvKey: 'selenium' },
+      { key: 'copper', name: 'Cu', drvKey: 'copper' },
+      { key: 'iodine', name: 'I', drvKey: 'iodine' },
+    ];
+    const spokes = microKeys.map(k => k.name);
+    sourceItems.forEach((items, i) => {
+      const vals = microKeys.map(k => {
+        const raw = sumFieldFromDB(items, [k.key]);
+        const target = patientTargets[k.drvKey]?.target || 1;
+        return Math.min((raw / target) * 100, 150);
+      });
+      plotData.push({
+        type: 'scatterpolar',
+        r: [...vals, vals[0]],
+        theta: [...spokes, spokes[0]],
+        fill: 'toself',
+        name: labels[i],
+        opacity: 0.6,
+      });
+    });
+    layout.polar = {
+      radialaxis: { visible: true, range: [0, 150], ticksuffix: '%', gridcolor: PALETTE.grid },
+      angularaxis: { gridcolor: PALETTE.grid },
+    };
+    layout.showlegend = true;
+    delete layout.xaxis; delete layout.yaxis;
+  }
+ 
+  // ── PANNELLO VITAMINE ─────────────────────────────────────────────────────
+  else if (m.aggregation === 'vita_panel') {
+    const vitKeys = [
+      { key: 'vitamin_a_retinol_equivalent', name: 'Vit A', drvKey: 'vitamin_a_retinol_equivalent', scale: 1 },
+      { key: 'vitamin_c',  name: 'Vit C',  drvKey: 'vitamin_c',  scale: 1    },
+      { key: 'vitamin_d',  name: 'Vit D',  drvKey: 'vitamin_d',  scale: 100  }, // μg→ scala ×100 per visibilità
+      { key: 'vitamin_e',  name: 'Vit E',  drvKey: 'vitamin_e',  scale: 1    },
+      { key: 'folate',     name: 'Folato', drvKey: 'folate',     scale: 1    },
+      { key: 'vitamin_b12',name: 'Vit B12',drvKey: 'vitamin_b12',scale: 1000 },
+      { key: 'vitamin_k',  name: 'Vit K',  drvKey: 'vitamin_k',  scale: 1    },
+      { key: 'thiamine',   name: 'B1',     drvKey: 'thiamine',   scale: 1    },
+      { key: 'riboflavin', name: 'B2',     drvKey: 'riboflavin', scale: 1    },
+      { key: 'niacin',     name: 'Niacina',drvKey: 'niacin',     scale: 1    },
+    ];
+    const spokes = vitKeys.map(k => k.name);
+    sourceItems.forEach((items, i) => {
+      const vals = vitKeys.map(k => {
+        const raw = sumFieldFromDB(items, [k.key]);
+        const target = (patientTargets[k.drvKey]?.target || 1);
+        return Math.min((raw / target) * 100, 150);
+      });
+      plotData.push({
+        type: 'scatterpolar',
+        r: [...vals, vals[0]],
+        theta: [...spokes, spokes[0]],
+        fill: 'toself', name: labels[i], opacity: 0.6,
+      });
+    });
+    layout.polar = {
+      radialaxis: { visible: true, range: [0, 150], ticksuffix: '%', gridcolor: PALETTE.grid },
+      angularaxis: { gridcolor: PALETTE.grid },
+    };
+    delete layout.xaxis; delete layout.yaxis;
+  }
+ 
+  // ── PANNELLO BIOATTIVI ────────────────────────────────────────────────────
+  else if (m.aggregation === 'bio_panel') {
+    const bioKeys = [
+      { keys: ['polyphenols'],          name: 'Polifenoli',    color: PALETTE.pink   },
+      { keys: ['lycopene'],             name: 'Licopene',      color: PALETTE.red    },
+      { keys: ['lutein','zeaxanthin'],  name: 'Lut+Zeax',     color: PALETTE.orange },
+      { keys: ['beta_carotene'],        name: 'β-Carotene',   color: PALETTE.orange },
+      { keys: ['quercetin'],            name: 'Quercetina',   color: PALETTE.purple },
+      { keys: ['phytosterols'],         name: 'Fitosteroli',  color: PALETTE.teal   },
+    ];
+    bioKeys.forEach(bk => {
+      const vals = sourceItems.map(items => sumFieldFromDB(items, bk.keys));
+      if (vals.some(v => v > 0)) {
+        plotData.push({
+          x: labels, y: vals, type: 'bar', name: bk.name,
+          marker: { color: bk.color, opacity: 0.85 },
+        });
+      }
+    });
+    layout.barmode = 'group';
+    layout.yaxis.title = { text: 'Bioattivi (mg)' };
+  }
+ 
+  // ── RADAR DRV COVERAGE ───────────────────────────────────────────────────
+  else if (m.aggregation === 'drv_radar') {
+    const drvKeys = Object.keys(patientTargets).slice(0, 12); // max 12 spokes
+    const spokes = drvKeys.map(k => patientTargets[k].name || k);
+ 
+    sourceItems.forEach((items, i) => {
+      const r = drvKeys.map(key => {
+        const fieldKeys = Object.values(NUTRIENT_MAPPING)
+          .map((v, idx) => v === key ? Object.keys(NUTRIENT_MAPPING)[idx] : null)
+          .filter(Boolean);
+        const raw = sumFieldFromDB(items, [key]);
+        const target = patientTargets[key]?.target || 1;
+        return Math.min((raw / target) * 100, 150);
+      });
+ 
+      plotData.push({
+        type: 'scatterpolar',
+        r: [...r, r[0]], theta: [...spokes, spokes[0]],
+        fill: 'toself', name: labels[i], opacity: 0.65,
+      });
+    });
+    layout.polar = {
+      radialaxis: { visible: true, range: [0, 150], ticksuffix: '%', gridcolor: PALETTE.grid },
+      angularaxis: { gridcolor: PALETTE.grid },
+    };
+    layout.title = { text: 'Copertura DRV (100% = target EFSA)', font: { size: 12, color: PALETTE.subtext } };
+    delete layout.xaxis; delete layout.yaxis;
+  }
+ 
+  // ══════════════════════════════════════════════════════════════════════════
+  // ROUTING STANDARD (singola metrica)
+  // ══════════════════════════════════════════════════════════════════════════
+  else if (m.keys) {
+    const vals = sourceItems.map(items => sumFieldFromDB(items, m.keys));
+ 
+    if (smartConfig.type === 'bar' || smartConfig.type === 'line') {
+      const type = smartConfig.type === 'bar' ? 'bar' : 'scatter';
+      const mode = smartConfig.type === 'line' ? 'lines+markers' : undefined;
+      plotData.push({
+        x: labels, y: vals, type, mode, name: m.label,
+        marker: { color: barColor, opacity: 0.9, line: { color: 'rgba(0,0,0,0.05)', width: 1 } },
+        line: { color: barColor, width: 3, shape: 'spline' },
+        fill: smartConfig.type === 'line' ? 'tozeroy' : 'none',
+        fillcolor: smartConfig.type === 'line' ? barColor.replace(')', ',0.08)').replace('rgb', 'rgba') : undefined,
+        text: vals.map(v => `${v.toFixed(2)} ${m.unit}`),
+        textposition: 'outside',
+        textfont: { size: 9, color: PALETTE.text },
+        hovertemplate: `<b>%{x}</b><br>${m.label}: %{y:.2f} ${m.unit}<extra></extra>`,
+      });
+ 
+      // Linea target DRV (se disponibile e attivata)
+      if (smartConfig.showTarget && m.drvKey && patientTargets[m.drvKey]) {
+        const targetVal = patientTargets[m.drvKey].target;
+        plotData.push(makeDRVLine(targetVal, `${m.label} (DRV)`, PALETTE.red));
+        // Linea UL (limite superiore)
+        if (patientTargets[m.drvKey].ul) {
+          plotData.push(makeDRVLine(patientTargets[m.drvKey].ul, 'UL Limite', PALETTE.orange));
         }
-
-        // 2. PALETTE COLORI FISSA (Stile Apple Pro)
-        const cColor = '#1D1D1F'; // Nero per Carboidrati o Kcal
-        const pColor = '#00C853'; // Verde per Proteine o Valori primari
-        const fColor = '#86868B'; // Grigio per Grassi
-        const accColor = '#007AFF'; // Blu per metriche di confronto (es. Peso nel grafico misto)
-        
-        const colorMap = { kcal: cColor, p: pColor, c: cColor, f: fColor, weight: accColor };
-        const nameMap = { kcal: 'Kcal', p: 'Proteine (g)', c: 'Carbo (g)', f: 'Grassi (g)', weight: 'Volume Cibo (g)' };
-
-        // 3. COSTRUZIONE DEL LAYOUT BASE
-        let plotData = [];
-        let layout = { 
-            autosize: true, 
-            margin: { t: 40, l: 60, r: 60, b: 60 }, // Margini allargati per mostrare bene le etichette degli assi
-            paper_bgcolor: 'transparent',
-            plot_bgcolor: 'transparent',
-            font: { family: '-apple-system, BlinkMacSystemFont, sans-serif', color: '#86868B' },
-            showlegend: true,
-            legend: { orientation: 'h', y: -0.2 },
-            xaxis: { tickangle: -45 }
-        };
-
-        // 4. RENDERING CONDIZIONALE DEI TIPI DI GRAFICO
-        if (smartConfig.type === 'bar' || smartConfig.type === 'line') {
-            const type = smartConfig.type === 'bar' ? 'bar' : 'scatter';
-            const mode = smartConfig.type === 'line' ? 'lines+markers' : undefined;
-
-            if (smartConfig.metric === 'macro') {
-                plotData.push({ x: labels, y: dataMap.c, type, mode, name: nameMap.c, marker: { color: cColor }, line: { color: cColor, width: 2 } });
-                plotData.push({ x: labels, y: dataMap.p, type, mode, name: nameMap.p, marker: { color: pColor }, line: { color: pColor, width: 2 } });
-                plotData.push({ x: labels, y: dataMap.f, type, mode, name: nameMap.f, marker: { color: fColor }, line: { color: fColor, width: 2 } });
-                if (smartConfig.type === 'bar') layout.barmode = 'stack';
-                layout.yaxis = { title: { text: 'Grammi (g)' } };
-            } else {
-                const m = smartConfig.metric;
-                plotData.push({ x: labels, y: dataMap[m], type, mode, name: nameMap[m], marker: { color: colorMap[m] }, line: { color: colorMap[m], width: 3 }, fill: smartConfig.type === 'line' ? 'tozeroy' : 'none' });
-                layout.yaxis = { title: { text: nameMap[m] } };
-            }
-        } 
-        
-        else if (smartConfig.type === 'pie') {
-            if (smartConfig.metric === 'macro') {
-                const sumPro = dataMap.p.reduce((a,b) => a+b, 0);
-                const sumCar = dataMap.c.reduce((a,b) => a+b, 0);
-                const sumFat = dataMap.f.reduce((a,b) => a+b, 0);
-                plotData.push({ labels: [nameMap.c, nameMap.p, nameMap.f], values: [sumCar, sumPro, sumFat], type: 'pie', hole: 0.4, marker: { colors: [cColor, pColor, fColor] }, textinfo: 'label+percent' });
-            } else {
-                const m = smartConfig.metric;
-                plotData.push({ labels: labels, values: dataMap[m], type: 'pie', hole: 0.4, textinfo: 'label+percent', name: nameMap[m] });
-            }
-        }
-
-        // GRAFICO MISTO: Kcal (Y primario) vs Volume (Y secondario)
-        else if (smartConfig.type === 'mixed') {
-            plotData.push({ x: labels, y: dataMap.kcal, type: 'bar', name: 'Kcal Totali', marker: { color: cColor }, yaxis: 'y1' });
-            plotData.push({ x: labels, y: dataMap.weight, type: 'scatter', mode: 'lines+markers', name: 'Volume Cibo (g)', line: { color: accColor, width: 3 }, marker: { size: 8 }, yaxis: 'y2' });
-            
-            layout.yaxis = { title: { text: 'Calorie (Kcal)', font: { color: cColor } }, tickfont: { color: cColor } };
-            layout.yaxis2 = { title: { text: 'Volume (g)', font: { color: accColor } }, tickfont: { color: accColor }, overlaying: 'y', side: 'right' };
-        }
-
-        // GRAFICO RADAR
-        else if (smartConfig.type === 'radar') {
-            labels.forEach((label, i) => {
-                plotData.push({
-                    type: 'scatterpolar',
-                    r: [dataMap.c[i], dataMap.p[i], dataMap.f[i], dataMap.c[i]], 
-                    theta: ['Carbo (g)', 'Proteine (g)', 'Grassi (g)', 'Carbo (g)'],
-                    fill: 'toself',
-                    name: label
-                });
-            });
-            layout.polar = { radialaxis: { visible: true, range: [0, Math.max(...dataMap.c, ...dataMap.p, ...dataMap.f) * 1.2] } };
-        }
-
-        // GRAFICO 3D (Ora con le etichette chiare per X, Y e Z)
-        else if (smartConfig.type === '3d') {
-            plotData.push({
-                x: dataMap.c, y: dataMap.p, z: dataMap.f,
-                mode: 'markers+text', type: 'scatter3d',
-                text: labels, textposition: 'top center',
-                marker: { size: 8, color: dataMap.kcal, colorscale: 'Viridis', opacity: 0.8, showscale: true, colorbar: { title: 'Kcal' } }
-            });
-            
-            layout.scene = {
-                xaxis: { title: { text: 'Carboidrati (g)' } }, 
-                yaxis: { title: { text: 'Proteine (g)' } }, 
-                zaxis: { title: { text: 'Grassi (g)' } }
-            };
-            layout.margin = { l: 0, r: 0, b: 0, t: 0 };
-        }
-
-        window.Plotly.purge(plotRef.current);
-        
-        // Configurazione finale: displayModeBar: false nasconde definitivamente la toolbar fluttuante
-        window.Plotly.newPlot(plotRef.current, plotData, layout, { displayModeBar: false, responsive: true });
-
-    }, [isSmartOpen, activeDay, smartConfig, dietDays]);
+      }
+      layout.yaxis.title = { text: `${m.label} (${m.unit})` };
+    }
+ 
+    else if (smartConfig.type === 'pie') {
+      plotData.push({
+        labels, values: vals, type: 'pie', hole: 0.42,
+        textinfo: 'label+percent',
+        hovertemplate: `<b>%{label}</b><br>${m.label}: %{value:.2f} ${m.unit}<br>(%{percent})<extra></extra>`,
+        marker: {
+          colors: labels.map((_, i) => `hsl(${(i * 47 + 195) % 360}, 65%, 58%)`),
+          line: { color: 'white', width: 2 },
+        },
+      });
+      layout.margin = { t: 30, l: 30, r: 30, b: 60 };
+    }
+ 
+    else if (smartConfig.type === 'radar') {
+      plotData.push({
+        type: 'scatterpolar',
+        r: [...vals, vals[0]],
+        theta: [...labels, labels[0]],
+        fill: 'toself', name: m.label,
+        line: { color: barColor, width: 2 },
+        marker: { color: barColor },
+        fillcolor: barColor.replace(')', ',0.15)').replace('rgb', 'rgba'),
+      });
+      layout.polar = { radialaxis: { visible: true, gridcolor: PALETTE.grid } };
+      delete layout.xaxis; delete layout.yaxis;
+    }
+ 
+    else if (smartConfig.type === 'mixed') {
+      const kcalVals = sourceItems.map(items => calculateTotals(items).kcal);
+      plotData.push({
+        x: labels, y: kcalVals, type: 'bar', name: 'Kcal',
+        marker: { color: PALETTE.gray, opacity: 0.7 }, yaxis: 'y1',
+      });
+      plotData.push({
+        x: labels, y: vals, type: 'scatter', mode: 'lines+markers',
+        name: m.label, line: { color: barColor, width: 3, shape: 'spline' },
+        marker: { color: barColor, size: 8 }, yaxis: 'y2',
+      });
+      layout.yaxis = { title: { text: 'Kcal', font: { color: PALETTE.gray } }, tickfont: { color: PALETTE.gray } };
+      layout.yaxis2 = { title: { text: `${m.label} (${m.unit})`, font: { color: barColor } }, tickfont: { color: barColor }, overlaying: 'y', side: 'right' };
+    }
+ 
+    else if (smartConfig.type === '3d') {
+      const cVals = sourceItems.map(items => calculateTotals(items).c);
+      const pVals = sourceItems.map(items => calculateTotals(items).p);
+      plotData.push({
+        x: cVals, y: pVals, z: vals,
+        mode: 'markers+text', type: 'scatter3d',
+        text: labels, textposition: 'top center',
+        marker: { size: 9, color: vals, colorscale: 'Viridis', opacity: 0.85, showscale: true, colorbar: { title: m.unit } },
+      });
+      layout.scene = {
+        xaxis: { title: { text: 'Carboidrati (g)' } },
+        yaxis: { title: { text: 'Proteine (g)' } },
+        zaxis: { title: { text: m.label + ` (${m.unit})` } },
+      };
+      layout.margin = { l: 0, r: 0, b: 0, t: 0 };
+    }
+  }
+ 
+  // ── Macro base legacy (kcal / macro comparison) ───────────────────────────
+  else if (m.aggregation === 'kcal') {
+    const kcalVals = sourceItems.map(items => calculateTotals(items).kcal);
+    if (smartConfig.type === 'bar' || smartConfig.type === 'line') {
+      const type = smartConfig.type === 'bar' ? 'bar' : 'scatter';
+      const mode = smartConfig.type === 'line' ? 'lines+markers' : undefined;
+      plotData.push({
+        x: labels, y: kcalVals, type, mode, name: 'Kcal',
+        marker: { color: PALETTE.primary }, line: { color: PALETTE.primary, width: 3 },
+        fill: smartConfig.type === 'line' ? 'tozeroy' : 'none',
+      });
+      if (smartConfig.showTarget && targets.kcal) {
+        plotData.push(makeDRVLine(targets.kcal, 'Target Kcal', PALETTE.green));
+      }
+    } else if (smartConfig.type === 'pie') {
+      plotData.push({ labels, values: kcalVals, type: 'pie', hole: 0.42, textinfo: 'label+percent' });
+    }
+    layout.yaxis.title = { text: 'Calorie (Kcal)' };
+  }
+ 
+  else if (m.aggregation === 'macro') {
+    const cVals = sourceItems.map(items => calculateTotals(items).c);
+    const pVals = sourceItems.map(items => calculateTotals(items).p);
+    const fVals = sourceItems.map(items => calculateTotals(items).f);
+    const type = smartConfig.type === 'line' ? 'scatter' : 'bar';
+    const mode = smartConfig.type === 'line' ? 'lines+markers' : undefined;
+    plotData = [
+      { x: labels, y: cVals, type, mode, name: 'Carbo (g)', marker: { color: '#1D1D1F' }, line: { color: '#1D1D1F', width:2 } },
+      { x: labels, y: pVals, type, mode, name: 'Pro (g)', marker: { color: PALETTE.green }, line: { color: PALETTE.green, width:2 } },
+      { x: labels, y: fVals, type, mode, name: 'Fat (g)', marker: { color: PALETTE.gray }, line: { color: PALETTE.gray, width:2 } },
+    ];
+    layout.barmode = smartConfig.type === 'bar' ? 'stack' : undefined;
+    layout.yaxis.title = { text: 'Grammi (g)' };
+  }
+ 
+  // ── Render finale ─────────────────────────────────────────────────────────
+  window.Plotly.purge(plotRef.current);
+  window.Plotly.newPlot(plotRef.current, plotData, layout, {
+    displayModeBar: false,
+    responsive: true,
+    scrollZoom: false,
+  });
+ 
+}, [isSmartOpen, activeDay, smartConfig, dietDays, drvDB]);
+ 
 
     // --- STATI PER I REPORT SALVATI ---
     const [savedReports, setSavedReports] = useState(() => {
@@ -1312,6 +1585,166 @@ const HistoryIcon = () => (
         // Restituisce i valori e un parametro per calcolare il pasto
         return { data: analysis, avgMealsPerDay: totalMeals / dayCount };
     };
+
+    const METRIC_CATALOG = {
+  // ── MACRO BASE ────────────────────────────────────────────────────────────
+  kcal:   { label: 'Calorie Totali',         unit: 'kcal', group: 'Macro Base',    keys: null, aggregation: 'kcal'   },
+  macro:  { label: 'Macro P/C/F (confronto)',unit: 'g',    group: 'Macro Base',    keys: null, aggregation: 'macro'  },
+  p:      { label: 'Proteine',               unit: 'g',    group: 'Macro Base',    keys: ['proteins','p'],           },
+  c:      { label: 'Carboidrati Totali',      unit: 'g',    group: 'Macro Base',    keys: ['available_carbohydrates','c'] },
+  f:      { label: 'Grassi Totali',           unit: 'g',    group: 'Macro Base',    keys: ['lipids','f']              },
+  fiber:  { label: 'Fibre Totali',            unit: 'g',    group: 'Macro Base',    keys: ['total_fiber']             },
+ 
+  // ── PROFILO LIPIDICO ──────────────────────────────────────────────────────
+  sfa:    { label: 'Acidi Grassi Saturi (SFA)',   unit: 'g', group: 'Profilo Lipidico', keys: ['Saturated_fatty_acids']        },
+  mufa:   { label: 'Monoinsaturi (MUFA)',          unit: 'g', group: 'Profilo Lipidico', keys: ['monounsaturated_fatty_acids']  },
+  pufa:   { label: 'Polinsaturi (PUFA)',           unit: 'g', group: 'Profilo Lipidico', keys: ['polyunsaturated_fatty_acids']  },
+  epa:    { label: 'EPA (C20:5 ω-3)',              unit: 'g', group: 'Profilo Lipidico', keys: ['C20:5_eicosapentaenoic_acid_EPA'] },
+  dha:    { label: 'DHA (C22:6 ω-3)',              unit: 'g', group: 'Profilo Lipidico', keys: ['C22:6_docosahexaenoic_acid_DHA'] },
+  la:     { label: 'Acido Linoleico (LA)',         unit: 'g', group: 'Profilo Lipidico', keys: ['C18:2_linoleic_acid']          },
+  ala:    { label: 'Acido α-Linolenico (ALA)',     unit: 'g', group: 'Profilo Lipidico', keys: ['C18:3_linolenic_acid']         },
+  palmit: { label: 'Acido Palmitico (C16:0)',      unit: 'g', group: 'Profilo Lipidico', keys: ['C16:0_palmitic_acid']          },
+  steari: { label: 'Acido Stearico (C18:0)',       unit: 'g', group: 'Profilo Lipidico', keys: ['C18:0_stearic_acid']           },
+  oleic:  { label: 'Acido Oleico (C18:1)',         unit: 'g', group: 'Profilo Lipidico', keys: ['C18:1_oleic_acid']             },
+  chol:   { label: 'Colesterolo',                  unit: 'mg', group: 'Profilo Lipidico', keys: ['cholesterol']                },
+  lipid_panel: { label: 'Pannello Lipidico Completo', unit: 'g', group: 'Profilo Lipidico', aggregation: 'lipid_panel' },
+ 
+  // ── AMINOACIDI ────────────────────────────────────────────────────────────
+  amino_panel: { label: 'Pool Amminoacidico Completo', unit: 'g', group: 'Aminoacidi', aggregation: 'amino_panel' },
+  leu:  { label: 'Leucina (BCAA)',     unit: 'g', group: 'Aminoacidi', keys: ['leucine']    },
+  ile:  { label: 'Isoleucina (BCAA)',  unit: 'g', group: 'Aminoacidi', keys: ['isoleucine'] },
+  val:  { label: 'Valina (BCAA)',      unit: 'g', group: 'Aminoacidi', keys: ['valine']     },
+  lys:  { label: 'Lisina',            unit: 'g', group: 'Aminoacidi', keys: ['lysine']     },
+  trp:  { label: 'Triptofano',        unit: 'g', group: 'Aminoacidi', keys: ['tryptophan'] },
+  met:  { label: 'Metionina',         unit: 'g', group: 'Aminoacidi', keys: ['methionine'] },
+  phe:  { label: 'Fenilalanina',      unit: 'g', group: 'Aminoacidi', keys: ['phenylalanine'] },
+  his:  { label: 'Istidina',          unit: 'g', group: 'Aminoacidi', keys: ['histidine']  },
+  thr:  { label: 'Treonina',          unit: 'g', group: 'Aminoacidi', keys: ['threonine']  },
+ 
+  // ── MICRONUTRIENTI (DRV) ──────────────────────────────────────────────────
+  ca:   { label: 'Calcio',             unit: 'mg', group: 'Micronutrienti', keys: ['calcium'],    drvKey: 'calcium'    },
+  fe:   { label: 'Ferro',              unit: 'mg', group: 'Micronutrienti', keys: ['iron'],        drvKey: 'iron'       },
+  mg:   { label: 'Magnesio',           unit: 'mg', group: 'Micronutrienti', keys: ['magnesium'],   drvKey: 'magnesium'  },
+  zn:   { label: 'Zinco',              unit: 'mg', group: 'Micronutrienti', keys: ['zinc'],        drvKey: 'zinc'       },
+  k:    { label: 'Potassio',           unit: 'mg', group: 'Micronutrienti', keys: ['potassium'],   drvKey: 'potassium'  },
+  na:   { label: 'Sodio',              unit: 'mg', group: 'Micronutrienti', keys: ['sodium'],      drvKey: 'sodium'     },
+  se:   { label: 'Selenio',            unit: 'μg', group: 'Micronutrienti', keys: ['selenium'],    drvKey: 'selenium'   },
+  cu:   { label: 'Rame',              unit: 'mg', group: 'Micronutrienti', keys: ['copper'],      drvKey: 'copper'     },
+  iod:  { label: 'Iodio',              unit: 'μg', group: 'Micronutrienti', keys: ['iodine'],      drvKey: 'iodine'     },
+  micro_panel: { label: 'Pannello Minerali Completo', unit: 'mg', group: 'Micronutrienti', aggregation: 'micro_panel' },
+ 
+  // ── VITAMINE ──────────────────────────────────────────────────────────────
+  vitA: { label: 'Vitamina A (RE)',     unit: 'μg', group: 'Vitamine', keys: ['vitamin_a_retinol_equivalent'], drvKey: 'vitamin_a_retinol_equivalent' },
+  vitC: { label: 'Vitamina C',          unit: 'mg', group: 'Vitamine', keys: ['vitamin_c'],   drvKey: 'vitamin_c'  },
+  vitD: { label: 'Vitamina D',          unit: 'μg', group: 'Vitamine', keys: ['vitamin_d'],   drvKey: 'vitamin_d'  },
+  vitE: { label: 'Vitamina E',          unit: 'mg', group: 'Vitamine', keys: ['vitamin_e'],   drvKey: 'vitamin_e'  },
+  vitK: { label: 'Vitamina K',          unit: 'μg', group: 'Vitamine', keys: ['vitamin_k'],   drvKey: 'vitamin_k'  },
+  vitB6:{ label: 'Vitamina B6',         unit: 'mg', group: 'Vitamine', keys: ['vitamin_b6'],  drvKey: 'vitamin_b6' },
+  vitB12:{label: 'Vitamina B12',        unit: 'μg', group: 'Vitamine', keys: ['vitamin_b12'], drvKey: 'vitamin_b12'},
+  fol:  { label: 'Folato',              unit: 'μg', group: 'Vitamine', keys: ['folate'],       drvKey: 'folate'     },
+  niac: { label: 'Niacina',             unit: 'mg', group: 'Vitamine', keys: ['niacin'],       drvKey: 'niacin'     },
+  thia: { label: 'Tiamina (B1)',         unit: 'mg', group: 'Vitamine', keys: ['thiamine'],     drvKey: 'thiamine'   },
+  ribo: { label: 'Riboflavina (B2)',     unit: 'mg', group: 'Vitamine', keys: ['riboflavin'],   drvKey: 'riboflavin' },
+  vita_panel: { label: 'Pannello Vitamine Completo', unit: 'varie', group: 'Vitamine', aggregation: 'vita_panel' },
+ 
+  // ── BIOATTIVI & FITOCOMPOSTI ───────────────────────────────────────────────
+  polyphen: { label: 'Polifenoli Totali',   unit: 'mg', group: 'Bioattivi', keys: ['polyphenols']       },
+  lyco:     { label: 'Licopene',             unit: 'mg', group: 'Bioattivi', keys: ['lycopene']           },
+  lut:      { label: 'Luteina + Zeaxantina', unit: 'mg', group: 'Bioattivi', keys: ['lutein','zeaxanthin'] },
+  betacar:  { label: 'β-Carotene',           unit: 'mg', group: 'Bioattivi', keys: ['beta_carotene']      },
+  quer:     { label: 'Quercetina',           unit: 'mg', group: 'Bioattivi', keys: ['quercetin']          },
+  phytos:   { label: 'Fitosteroli',          unit: 'mg', group: 'Bioattivi', keys: ['phytosterols']       },
+  bio_panel:{ label: 'Pannello Bioattivi',   unit: 'mg', group: 'Bioattivi', aggregation: 'bio_panel'     },
+ 
+  // ── ANALISI DRV ──────────────────────────────────────────────────────────
+  drv_radar:{ label: 'Radar Copertura DRV (%)', unit: '%', group: 'Analisi DRV', aggregation: 'drv_radar' },
+};
+ 
+// Funzione helper: somma un campo dal foodDB per una lista di items
+const sumFieldFromDB = (items, fieldKeys) => {
+  return items.reduce((acc, item) => {
+    const food = foodDB.find(f => f.name === item.name);
+    if (!food) return acc;
+    const factor = (Number(item.weight) || 0) / 100;
+    const val = fieldKeys.reduce((sum, k) => sum + (Number(food[k]) || 0), 0);
+    return acc + val * factor;
+  }, 0);
+};
+ 
+// Funzione di aggregazione dati per tipo metrica
+const buildMetricData = (items, metricKey) => {
+  const m = METRIC_CATALOG[metricKey];
+  if (!m) return 0;
+  if (m.keys) return sumFieldFromDB(items, m.keys);
+  if (m.aggregation === 'kcal') return calculateTotals(items).kcal;
+  return 0;
+};
+
+const IconChart = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/>
+    <line x1="6" y1="20" x2="6" y2="14"/><line x1="2" y1="20" x2="22" y2="20"/>
+  </svg>
+);
+ 
+const IconLine = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+  </svg>
+);
+ 
+const IconPie = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M21.21 15.89A10 10 0 1 1 8 2.83"/><path d="M22 12A10 10 0 0 0 12 2v10z"/>
+  </svg>
+);
+ 
+const IconRadar = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <polygon points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5 12 2"/>
+    <line x1="12" y1="2" x2="12" y2="22"/><line x1="2" y1="8.5" x2="22" y2="8.5"/>
+    <line x1="2" y1="15.5" x2="22" y2="15.5"/>
+  </svg>
+);
+ 
+const IconMixed = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="2" y="14" width="4" height="6"/><rect x="10" y="9" width="4" height="11"/>
+    <rect x="18" y="4" width="4" height="16"/><polyline points="2 7 8 3 14 6 22 2"/>
+  </svg>
+);
+ 
+const Icon3D = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/>
+  </svg>
+);
+ 
+const IconClose = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+    <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+  </svg>
+);
+ 
+const IconSave = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+    <polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/>
+  </svg>
+);
+ 
+const IconReset = () => (
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="1 4 1 10 7 10"/>
+    <path d="M3.51 15a9 9 0 1 0 .49-4.95"/>
+  </svg>
+);
+ 
+const IconTarget = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>
+  </svg>
+);
 
     
 
@@ -1801,6 +2234,233 @@ const HistoryIcon = () => (
                     justify-content: center;
                     margin: 0 auto 20px;
                 }
+
+                @keyframes slideInModal {
+    from { opacity: 0; transform: scale(0.96) translateY(16px); }
+    to   { opacity: 1; transform: scale(1)    translateY(0); }
+  }
+  @keyframes fadeInPanel {
+    from { opacity: 0; transform: translateX(-8px); }
+    to   { opacity: 1; transform: translateX(0); }
+  }
+  @keyframes fadeInChart {
+    from { opacity: 0; transform: translateX(8px); }
+    to   { opacity: 1; transform: translateX(0); }
+  }
+ 
+  .sc-modal-overlay {
+    position: fixed; inset: 0; z-index: 9999;
+    background: rgba(0,0,0,0.45);
+    backdrop-filter: blur(16px);
+    display: flex; align-items: center; justify-content: center;
+    padding: 24px;
+  }
+  .sc-modal {
+    background: #FFFFFF;
+    width: 100%; max-width: 1100px; height: 88vh;
+    border-radius: 28px;
+    box-shadow: 0 40px 100px rgba(0,0,0,0.18), 0 0 0 1px rgba(0,0,0,0.04);
+    display: flex; flex-direction: column;
+    overflow: hidden;
+    animation: slideInModal 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+ 
+  /* HEADER */
+  .sc-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 20px 28px;
+    border-bottom: 1px solid #F0F0F2;
+    flex-shrink: 0;
+  }
+  .sc-header-title {
+    font-size: 17px; font-weight: 700; color: #1D1D1F;
+    letter-spacing: -0.3px;
+  }
+  .sc-header-sub {
+    font-size: 11px; font-weight: 500; color: #8E8E93;
+    margin-top: 1px; letter-spacing: 0.1px;
+  }
+  .sc-close-btn {
+    width: 36px; height: 36px; border-radius: 12px;
+    border: 1px solid #E5E5EA; background: #F9F9FB;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; color: #636366;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+  }
+  .sc-close-btn:hover { background: #F2F2F7; color: #1D1D1F; border-color: #D1D1D6; }
+ 
+  /* BODY: due colonne */
+  .sc-body {
+    display: grid;
+    grid-template-columns: 280px 1fr;
+    flex: 1;
+    overflow: hidden;
+  }
+ 
+  /* PANNELLO SINISTRO */
+  .sc-panel {
+    border-right: 1px solid #F0F0F2;
+    background: #FAFAFC;
+    padding: 24px 20px;
+    display: flex; flex-direction: column; gap: 24px;
+    overflow-y: auto;
+    animation: fadeInPanel 0.35s 0.1s cubic-bezier(0.16,1,0.3,1) both;
+  }
+  .sc-panel::-webkit-scrollbar { display: none; }
+ 
+  .sc-section-label {
+    font-size: 9px; font-weight: 800; color: #8E8E93;
+    text-transform: uppercase; letter-spacing: 0.8px;
+    margin-bottom: 8px;
+  }
+ 
+  /* Toggle scope */
+  .sc-scope-toggle {
+    display: flex; background: #EFEFEF; border-radius: 10px; padding: 3px; gap: 2px;
+  }
+  .sc-scope-btn {
+    flex: 1; padding: 7px 10px; border-radius: 8px; border: none;
+    font-size: 11px; font-weight: 600; cursor: pointer;
+    transition: background 0.2s, color 0.2s, box-shadow 0.2s;
+    background: transparent; color: #636366;
+  }
+  .sc-scope-btn.active {
+    background: #FFFFFF; color: #1D1D1F;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+  }
+ 
+  /* Tipo grafico — pill grid */
+  .sc-type-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 6px;
+  }
+  .sc-type-btn {
+    display: flex; align-items: center; gap: 7px;
+    padding: 9px 12px; border-radius: 10px;
+    border: 1.5px solid #E5E5EA; background: #FFFFFF;
+    font-size: 11px; font-weight: 600; color: #636366;
+    cursor: pointer;
+    transition: border-color 0.15s, color 0.15s, background 0.15s, transform 0.12s;
+  }
+  .sc-type-btn:hover { border-color: #C7C7CC; color: #1D1D1F; transform: translateY(-1px); }
+  .sc-type-btn.active {
+    border-color: #1D1D1F; background: #1D1D1F; color: #FFFFFF;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+  }
+ 
+  /* Metrica select */
+  .sc-select {
+    width: 100%; padding: 10px 12px;
+    border-radius: 10px; border: 1.5px solid #E5E5EA;
+    background: #FFFFFF; font-size: 12px; font-weight: 600;
+    color: #1D1D1F; outline: none;
+    transition: border-color 0.15s, box-shadow 0.15s;
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238E8E93' stroke-width='2.5' stroke-linecap='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+    padding-right: 32px;
+    cursor: pointer;
+  }
+  .sc-select:focus { border-color: #00C853; box-shadow: 0 0 0 3px rgba(0,200,83,0.1); }
+ 
+  /* Toggle DRV */
+  .sc-drv-toggle {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 12px; border-radius: 10px;
+    border: 1.5px solid #E5E5EA; background: #FFFFFF;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+  }
+  .sc-drv-toggle.active { border-color: #00C853; background: #F2FFF7; }
+  .sc-drv-toggle-label {
+    font-size: 11px; font-weight: 600; color: #636366; flex: 1; line-height: 1.3;
+  }
+  .sc-drv-toggle.active .sc-drv-toggle-label { color: #009624; }
+  .sc-toggle-pill {
+    width: 32px; height: 18px; border-radius: 9px;
+    background: #D1D1D6; position: relative;
+    transition: background 0.2s;
+    flex-shrink: 0;
+  }
+  .sc-drv-toggle.active .sc-toggle-pill { background: #00C853; }
+  .sc-toggle-dot {
+    position: absolute; top: 2px; left: 2px;
+    width: 14px; height: 14px; border-radius: 50%; background: white;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+    transition: transform 0.2s cubic-bezier(0.34,1.56,0.64,1);
+  }
+  .sc-drv-toggle.active .sc-toggle-dot { transform: translateX(14px); }
+ 
+  /* Note textarea */
+  .sc-notes {
+    width: 100%; padding: 10px 12px;
+    border-radius: 10px; border: 1.5px solid #E5E5EA;
+    background: #FFFFFF; font-size: 11px; font-weight: 500;
+    color: #1D1D1F; outline: none; resize: none;
+    font-family: inherit; line-height: 1.5;
+    transition: border-color 0.15s, box-shadow 0.15s;
+    min-height: 72px;
+  }
+  .sc-notes:focus { border-color: #00C853; box-shadow: 0 0 0 3px rgba(0,200,83,0.1); }
+  .sc-notes::placeholder { color: #C7C7CC; font-weight: 400; }
+ 
+  /* AREA GRAFICO DESTRA */
+  .sc-chart-area {
+    display: flex; flex-direction: column;
+    padding: 24px 28px;
+    overflow: hidden;
+    animation: fadeInChart 0.35s 0.15s cubic-bezier(0.16,1,0.3,1) both;
+  }
+  .sc-chart-meta {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 16px;
+  }
+  .sc-chart-tag {
+    font-size: 9px; font-weight: 800; color: #00C853;
+    text-transform: uppercase; letter-spacing: 0.8px;
+    background: #F2FFF7; padding: 3px 9px; border-radius: 6px;
+    border: 1px solid #C8E6C9;
+  }
+  .sc-chart-container {
+    flex: 1; min-height: 0;
+    border-radius: 16px;
+    border: 1px solid #F0F0F2;
+    background: #FAFAFA;
+    overflow: hidden;
+    position: relative;
+  }
+ 
+  /* FOOTER */
+  .sc-footer {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 28px;
+    border-top: 1px solid #F0F0F2;
+    flex-shrink: 0;
+    background: #FFFFFF;
+  }
+  .sc-btn-reset {
+    display: flex; align-items: center; gap: 6px;
+    padding: 8px 14px; border-radius: 9px; border: 1.5px solid #E5E5EA;
+    background: transparent; font-size: 11px; font-weight: 600;
+    color: #8E8E93; cursor: pointer;
+    transition: border-color 0.15s, color 0.15s, background 0.15s;
+  }
+  .sc-btn-reset:hover { border-color: #C7C7CC; color: #1D1D1F; background: #F9F9FB; }
+  .sc-btn-save {
+    display: flex; align-items: center; gap: 7px;
+    padding: 9px 20px; border-radius: 10px; border: none;
+    background: #00C853; color: #FFFFFF;
+    font-size: 12px; font-weight: 700; cursor: pointer;
+    box-shadow: 0 4px 14px rgba(0,200,83,0.25);
+    transition: background 0.15s, box-shadow 0.15s, transform 0.12s;
+  }
+  .sc-btn-save:hover {
+    background: #00B548; box-shadow: 0 6px 18px rgba(0,200,83,0.32);
+    transform: translateY(-1px);
+  }
+  .sc-btn-save:active { transform: translateY(0); }
+ 
+  .sc-divider { width: 1px; height: 20px; background: #E5E5EA; margin: 0 4px; }
 
             `}</style>
 
@@ -2316,15 +2976,43 @@ const HistoryIcon = () => (
             {/* Invisibile in fase di stampa grazie alle media query nel CSS */}
             {/* --- PULSANTI FLUTTUANTI DOPPI --- */}
             <div className="fab-container no-print">
+                {/* --- PULSANTI FLUTTUANTI DOPPI --- */}
+            <div className="fab-container no-print">
+                
+                {/* Pulsante 1: Analisi Avanzata (Microscopio) */}
                 <button className="t-fab-print" onClick={() => setIsAnalysisOpen(true)} style={{ position: 'relative', bottom: 'auto', right: 'auto', background: 'linear-gradient(135deg, #1D1D1F 0%, #434345 100%)' }} title="Analisi Nutrizionale Avanzata">
-                    <i className="ph-bold ph-microscope text-2xl"></i>
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M6 18h8" />
+                        <path d="M3 22h18" />
+                        <path d="M14 22a7 7 0 1 0 0-14h-1" />
+                        <path d="M9 14h2" />
+                        <path d="M9 12a2 2 0 0 1-2-2V6h6v4a2 2 0 0 1-2 2Z" />
+                        <path d="M12 6V3a1 1 0 0 0-1-1H9a1 1 0 0 0-1 1v3" />
+                    </svg>
                 </button>
+
+                {/* Pulsante 2: Smart Chart Maker (Plot/Grafico) */}
                 <button className="t-fab-print" onClick={() => setIsSmartOpen(true)} style={{ position: 'relative', bottom: 'auto', right: 'auto', background: 'linear-gradient(135deg, #00C853 0%, #009624 100%)' }} title="Smart Chart Maker">
-                    <span style={{ fontSize: '20px' }}>Smart</span>
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M3 3v18h18" />
+                        <path d="M18 9l-5 5-3-3-4 4" />
+                        <circle cx="18" cy="9" r="1.5" fill="currentColor" />
+                        <circle cx="13" cy="14" r="1.5" fill="currentColor" />
+                        <circle cx="10" cy="11" r="1.5" fill="currentColor" />
+                        <circle cx="6" cy="15" r="1.5" fill="currentColor" />
+                    </svg>
                 </button>
-                <button className="t-fab-print" onClick={() => window.print()} style={{ position: 'relative', bottom: 'auto', right: 'auto' }} title="Stampa Documento">
-                    <span style={{ fontSize: '14px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '1px' }}>Stampa</span>
+
+                {/* Pulsante 3: Stampa Documento (Stampante) */}
+                <button className="t-fab-print" onClick={() => window.print()} style={{ position: 'relative', bottom: 'auto', right: 'auto', background: '#FFFFFF', color: '#1D1D1F', border: '1px solid #E5E5EA' }} title="Stampa Documento">
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="6 9 6 2 18 2 18 9" />
+                        <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" />
+                        <rect x="6" y="14" width="12" height="8" rx="1" />
+                    </svg>
                 </button>
+                
+            </div>
                 
             </div>
 
@@ -3250,99 +3938,166 @@ const HistoryIcon = () => (
 )}
             {/* --- MODALE SMART CHART MAKER --- */}
             {isSmartOpen && (
-                <div className="modal-backdrop">
-                    <div className="modal-window" style={{ maxWidth: '700px', height: 'auto' }}>
-                        
-                        <div style={{ padding: '25px 40px', borderBottom: '1px solid #F0F0F2', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <div>
-                                <h3 style={{ fontSize: '22px', fontWeight: 800, margin: 0, color: '#1D1D1F' }}>Smart Report Maker</h3>
-                                <span style={{ fontSize: '12px', color: '#86868B', fontWeight: 600 }}>Crea grafici personalizzati per l'analisi clinica</span>
-                            </div>
-                            <button onClick={() => setIsSmartOpen(false)} style={{ border: 'none', background: 'transparent', fontSize: '20px', cursor: 'pointer', color: '#86868B', fontWeight: 800 }}>X</button>
-                        </div>
-                        
-                        <div style={{ padding: '40px', background: '#FAFAFC', display: 'flex', flexDirection: 'column', gap: '25px' }}>
-                            
-                            {/* PANNELLO DI CONTROLLO AVANZATO PLOTLY */}
-                            {/* PANNELLO DI CONTROLLO AVANZATO PLOTLY */}
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '20px' }}>
-                                
-                                <div>
-                                    <label className="t-input-floating" style={{ marginBottom: '8px' }}>Estensione Dati</label>
-                                    <select 
-                                        value={smartConfig.scope} 
-                                        onChange={e => setSmartConfig({...smartConfig, scope: e.target.value})}
-                                        style={{ width: '100%', padding: '12px', borderRadius: '8px', border: '1px solid #E5E5EA', fontSize: '14px', fontWeight: 600, outline: 'none', background: '#FFFFFF' }}>
-                                        <option value="activeDay">Solo Giorno Corrente (Pasti)</option>
-                                        <option value="allDays">Confronta Tutti i Giorni</option>
-                                    </select>
-                                </div>
-
-                                <div>
-                                    <label className="t-input-floating" style={{ marginBottom: '8px' }}>Tipo di Grafico</label>
-                                    <select 
-                                        value={smartConfig.type} 
-                                        onChange={e => setSmartConfig({...smartConfig, type: e.target.value})}
-                                        style={{ width: '100%', padding: '12px', borderRadius: '8px', border: '1px solid #E5E5EA', fontSize: '14px', fontWeight: 600, outline: 'none', background: '#FFFFFF' }}>
-                                        <option value="bar">Istogramma</option>
-                                        <option value="line">Linea di Tendenza</option>
-                                        <option value="pie">Torta Composizione</option>
-                                        <option value="mixed">Misto (Kcal vs Peso)</option>
-                                        <option value="radar">Radar (Equilibrio Macro)</option>
-                                        <option value="3d">Scatter 3D (Volumetrico)</option>
-                                    </select>
-                                </div>
-
-                                <div>
-                                    <label className="t-input-floating" style={{ marginBottom: '8px' }}>Metrica Principale</label>
-                                    <select 
-                                        value={smartConfig.metric} 
-                                        onChange={e => setSmartConfig({...smartConfig, metric: e.target.value})}
-                                        disabled={smartConfig.type === 'mixed' || smartConfig.type === '3d' || smartConfig.type === 'radar'}
-                                        style={{ width: '100%', padding: '12px', borderRadius: '8px', border: '1px solid #E5E5EA', fontSize: '14px', fontWeight: 600, outline: 'none', background: smartConfig.type === 'mixed' || smartConfig.type === '3d' || smartConfig.type === 'radar' ? '#F5F5F7' : '#FFFFFF', color: smartConfig.type === 'mixed' || smartConfig.type === '3d' || smartConfig.type === 'radar' ? '#86868B' : '#1D1D1F' }}>
-                                        <option value="kcal">Calorie Totali</option>
-                                        <option value="macro">Confronto Macro (P/C/F)</option>
-                                        <option value="p">Proteine (g)</option>
-                                        <option value="c">Carboidrati (g)</option>
-                                        <option value="f">Grassi (g)</option>
-                                        <option value="weight">Volume (g)</option>
-                                    </select>
-                                </div>
-                            </div>
-
-                            <div style={{ background: '#FFFFFF', padding: '40px', borderRadius: '16px', border: '1px dashed #C7C7CC', textAlign: 'center', color: '#86868B' }}>
-                                {/* Area segnaposto per il rendering futuro del grafico selezionato */}
-                                {/* IL CONTENITORE DEL GRAFICO PLOTLY */}
-                            <div style={{ background: '#FFFFFF', padding: '20px', borderRadius: '16px', border: '1px dashed #C7C7CC', height: '350px', position: 'relative' }}>
-                                {/* Questo div viene "riempito" dalla funzione useEffect qua sopra */}
-                                <div ref={plotRef} style={{ width: '100%', height: '100%' }}></div>
-                            </div>
-                            </div>
-
-                            <div>
-                                <label className="t-input-floating" style={{ marginBottom: '8px' }}>Note Cliniche e Commenti al Paziente</label>
-                                <textarea 
-                                    value={smartConfig.comment}
-                                    onChange={e => setSmartConfig({...smartConfig, comment: e.target.value})}
-                                    placeholder="Inserisci qui le tue osservazioni nutrizionali, variazioni consigliate o feedback sull'andamento..."
-                                    style={{ width: '100%', padding: '16px', borderRadius: '12px', border: '1px solid #E5E5EA', fontSize: '14px', outline: 'none', minHeight: '120px', fontFamily: 'inherit', resize: 'vertical' }}
-                                />
-                            </div>
-
-                        </div>
-
-                        <div style={{ padding: '20px 40px', borderTop: '1px solid #F0F0F2', background: '#FFFFFF', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <button style={{ background: 'transparent', color: '#86868B', border: 'none', fontWeight: 700, cursor: 'pointer' }} onClick={() => setSmartConfig({type: 'bar', dataSource: 'kcal', comment: ''})}>
-                                Resetta
-                            </button>
-                            {/* Nel footer del Modale Smart, sostituisci il bottone esistente con questo */}
-                            <button onClick={saveSmartReport} style={{ background: '#00C853', color: 'white', padding: '12px 35px', borderRadius: '12px', border: 'none', fontWeight: 700, cursor: 'pointer' }}>
-                                Salva
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
+  <div className="sc-modal-overlay">
+    <div className="sc-modal">
+ 
+      {/* HEADER */}
+      <div className="sc-header">
+        <div>
+          <div className="sc-header-title">Smart Report Maker (BETA)</div>
+          <div className="sc-header-sub">Visualizzazione avanzata dati nutrizionali</div>
+        </div>
+        <button className="sc-close-btn" onClick={() => setIsSmartOpen(false)}>
+          <IconClose />
+        </button>
+      </div>
+ 
+      {/* BODY: pannello sx + grafico dx */}
+      <div className="sc-body">
+ 
+        {/* ── PANNELLO CONTROLLI ── */}
+        <div className="sc-panel">
+ 
+          {/* Scope */}
+          <div>
+            <div className="sc-section-label">Vista dati</div>
+            <div className="sc-scope-toggle">
+              <button
+                className={`sc-scope-btn ${smartConfig.scope === 'activeDay' ? 'active' : ''}`}
+                onClick={() => setSmartConfig({...smartConfig, scope: 'activeDay'})}
+              >
+                Giorno
+              </button>
+              <button
+                className={`sc-scope-btn ${smartConfig.scope === 'allDays' ? 'active' : ''}`}
+                onClick={() => setSmartConfig({...smartConfig, scope: 'allDays'})}
+              >
+                Tutti i giorni
+              </button>
+            </div>
+          </div>
+ 
+          {/* Tipo grafico */}
+          <div>
+            <div className="sc-section-label">Tipo di grafico</div>
+            <div className="sc-type-grid">
+              {[
+                { id: 'bar',   label: 'Istogramma', Icon: IconChart  },
+                { id: 'line',  label: 'Linea',      Icon: IconLine   },
+                { id: 'pie',   label: 'Torta',      Icon: IconPie    },
+                { id: 'radar', label: 'Radar',      Icon: IconRadar  },
+                { id: 'mixed', label: 'Misto',      Icon: IconMixed  },
+                { id: '3d',    label: 'Scatter 3D', Icon: Icon3D     },
+              ].map(({ id, label, Icon }) => (
+                <button
+                  key={id}
+                  className={`sc-type-btn ${smartConfig.type === id ? 'active' : ''}`}
+                  onClick={() => setSmartConfig({...smartConfig, type: id})}
+                >
+                  <Icon /> {label}
+                </button>
+              ))}
+            </div>
+          </div>
+ 
+          {/* Metrica */}
+          <div>
+            <div className="sc-section-label">Metrica / Nutriente</div>
+            <select
+              className="sc-select"
+              value={smartConfig.metric}
+              onChange={e => setSmartConfig({...smartConfig, metric: e.target.value})}
+            >
+              {Object.entries(
+                Object.entries(METRIC_CATALOG).reduce((groups, [key, meta]) => {
+                  if (!groups[meta.group]) groups[meta.group] = [];
+                  groups[meta.group].push({ key, ...meta });
+                  return groups;
+                }, {})
+              ).map(([groupName, items]) => (
+                <optgroup key={groupName} label={`${groupName}`}>
+                  {items.map(item => (
+                    <option key={item.key} value={item.key}>{item.label}</option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
+          </div>
+ 
+          {/* Toggle DRV */}
+          <div>
+            <div className="sc-section-label">Riferimento clinico</div>
+            <div
+              className={`sc-drv-toggle ${smartConfig.showTarget ? 'active' : ''}`}
+              onClick={() => setSmartConfig({...smartConfig, showTarget: !smartConfig.showTarget})}
+            >
+              <IconTarget />
+              <span className="sc-drv-toggle-label">
+                Linea target EFSA / DRV
+              </span>
+              <div className="sc-toggle-pill">
+                <div className="sc-toggle-dot" />
+              </div>
+            </div>
+          </div>
+ 
+          {/* Note cliniche */}
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+            <div className="sc-section-label">Note cliniche</div>
+            <textarea
+              className="sc-notes"
+              style={{ flex: 1 }}
+              value={smartConfig.comment}
+              onChange={e => setSmartConfig({...smartConfig, comment: e.target.value})}
+              placeholder="Osservazioni, variazioni consigliate, feedback..."
+            />
+          </div>
+ 
+        </div>
+ 
+        {/* ── AREA GRAFICO ── */}
+        <div className="sc-chart-area">
+          <div className="sc-chart-meta">
+            <span className="sc-chart-tag">
+              {smartConfig.scope === 'activeDay'
+                ? (activeDay?.title || 'Giorno corrente')
+                : 'Piano completo'}
+            </span>
+            <span style={{ fontSize: '10px', fontWeight: 600, color: '#C7C7CC', letterSpacing: '0.3px' }}>
+              {METRIC_CATALOG[smartConfig.metric]?.label || '—'}
+              {' · '}
+              {smartConfig.type.toUpperCase()}
+            </span>
+          </div>
+ 
+          <div className="sc-chart-container">
+            <div ref={plotRef} style={{ width: '100%', height: '100%' }} />
+          </div>
+        </div>
+ 
+      </div>
+ 
+      {/* FOOTER */}
+      <div className="sc-footer">
+        <button
+          className="sc-btn-reset"
+          onClick={() => setSmartConfig({ type: 'bar', metric: 'kcal', scope: 'activeDay', comment: '', showTarget: true })}
+        >
+          <IconReset /> Resetta
+        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <span style={{ fontSize: '10px', color: '#C7C7CC', fontWeight: 500 }}>
+            Il grafico verrà salvato nell'archivio
+          </span>
+          <button className="sc-btn-save" onClick={saveSmartReport}>
+            <IconSave /> Salva report
+          </button>
+        </div>
+      </div>
+ 
+    </div>
+  </div>
+)}
 
             
             
@@ -3443,7 +4198,7 @@ const HistoryIcon = () => (
                             {/* 2. SUB-HEADER */}
                             <div className="px-8 py-2 flex flex-col md:flex-row justify-between items-start md:items-end shrink-0 z-10 gap-4">
                                 <div>
-                                    <h3 className="text-2xl font-black text-gray-900 tracking-tight">Screening Molecolare</h3>
+                                    <h3 className="text-2xl font-black text-gray-900 tracking-tight">Screening Molecolare (BETA)</h3>
                                     <p className="text-xs font-bold text-gray-400 mt-1 uppercase tracking-wider">Incrocio con i DRV</p>
                                 </div>
                                 <div className="flex bg-white p-1 rounded-2xl shadow-sm border border-gray-100">
