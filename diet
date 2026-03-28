@@ -345,6 +345,7 @@ export const DietPlan = ({ patient }) => {
     // --- STATI ANALISI CLINICA E DRV (EFSA) ---
     const [drvDB, setDrvDB] = useState(() => {
         const stored = localStorage.getItem('diet_drv_db');
+        const [drvSearch, setDrvSearch] = useState('');
         return stored ? JSON.parse(stored) : [];
     });
     useEffect(() => { localStorage.setItem('diet_drv_db', JSON.stringify(drvDB)); }, [drvDB]);
@@ -1137,6 +1138,7 @@ const HistoryIcon = () => (
         return targets;
     };
 
+    // --- MOTORE DI CALCOLO MICRONUTRIENTI ---
     
 
     // --- GESTIONE SALVATAGGIO REPORT ---
@@ -3658,96 +3660,150 @@ const HistoryIcon = () => (
                 );
             })()}
 
-            {/* --- MODALE 2: EDITOR DRV (EFSA) --- */}
-            {isDrvEditorOpen && (
-                <div className="fixed inset-0 z-[14000] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-6xl h-[80vh] flex flex-col overflow-hidden">
-                        
-                        <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50 shrink-0">
-                            <div>
-                                <h3 className="text-lg font-black text-gray-900">Configurazione Range Riferimento (DRV)</h3>
-                                <span className="text-xs text-gray-500 font-bold">{drvDB.length} record importati dal JSON EFSA</span>
-                            </div>
-                            <div className="flex gap-2">
-                                <button onClick={() => drvFileInputRef.current.click()} className="px-4 py-2 bg-white border border-gray-200 rounded-xl text-xs font-bold hover:bg-green-50 hover:text-green-600 transition-colors flex items-center gap-2 shadow-sm">
-                                    <i className="ph-bold ph-upload-simple"></i> Importa JSON Popolazione
-                                </button>
-                                <input type="file" ref={drvFileInputRef} accept=".json" style={{ display: 'none' }} onChange={e => {
-                                    const file = e.target.files[0];
-                                    if (file) {
-                                        const reader = new FileReader();
-                                        reader.onload = (evt) => { setDrvDB(JSON.parse(evt.target.result)); alert("Database EFSA Caricato con successo!"); };
-                                        reader.readAsText(file);
-                                    }
-                                }} />
-                                
-                                <button onClick={() => {
-                                    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(drvDB, null, 2));
-                                    const a = document.createElement('a'); a.href = dataStr; a.download = "drv_custom.json"; a.click();
-                                }} className="px-4 py-2 bg-white border border-gray-200 rounded-xl text-xs font-bold hover:bg-blue-50 hover:text-blue-600 transition-colors flex items-center gap-2 shadow-sm">
-                                    <i className="ph-bold ph-download-simple"></i> Esporta Modifiche
-                                </button>
+            {/* --- MODALE 2: EDITOR DRV (EFSA) UI/UX PREMIUM --- */}
+            {isDrvEditorOpen && (() => {
+                // Filtro di ricerca in tempo reale
+                const filteredDrv = drvDB.filter(row => 
+                    !drvSearch || 
+                    (row.Nutrient && row.Nutrient.toLowerCase().includes(drvSearch.toLowerCase())) ||
+                    (row["Target population"] && row["Target population"].toLowerCase().includes(drvSearch.toLowerCase())) ||
+                    (row.Gender && row.Gender.toLowerCase().includes(drvSearch.toLowerCase()))
+                );
 
-                                <button onClick={() => setIsDrvEditorOpen(false)} className="w-10 h-10 rounded-full bg-gray-200 flex items-center justify-center ml-4 hover:bg-gray-300 transition-colors">
-                                    <i className="ph-bold ph-x text-lg"></i>
-                                </button>
-                            </div>
-                        </div>
-
-                        {/* Tabella Modificabile (Piena Libertà) */}
-                        <div className="flex-1 overflow-auto p-0 custom-scrollbar">
-                            {drvDB.length === 0 ? (
-                                <div className="h-full flex flex-col items-center justify-center text-gray-400">
-                                    <i className="ph-thin ph-database text-6xl mb-4"></i>
-                                    <p className="font-bold">Nessun dato presente. Importa il JSON convertito.</p>
+                return (
+                    <div className="fixed inset-0 z-[14000] flex items-center justify-center p-4 lg:p-6 bg-black/60 backdrop-blur-md fade-enter">
+                        <div className="bg-[#FAFAFC] rounded-[32px] shadow-2xl w-full max-w-6xl h-[90vh] flex flex-col overflow-hidden border border-white/20">
+                            
+                            {/* HEADER FLUTTUANTE */}
+                            <div className="p-6 bg-white border-b border-gray-100 shrink-0 flex flex-col md:flex-row justify-between items-center gap-4 z-10 shadow-sm">
+                                <div className="flex items-center gap-4">
+                                    <div className="w-12 h-12 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center shadow-inner border border-blue-100">
+                                        <i className="ph-bold ph-database text-2xl"></i>
+                                    </div>
+                                    <div>
+                                        <h3 className="text-xl font-black text-gray-900 tracking-tight">Libreria DRV (EFSA)</h3>
+                                        <span className="text-xs font-bold text-gray-400 uppercase tracking-widest">{drvDB.length} record nel database</span>
+                                    </div>
                                 </div>
-                            ) : (
-                                <table className="w-full text-left text-xs">
-                                    <thead className="bg-white sticky top-0 font-black text-gray-400 uppercase tracking-wider z-10 border-b border-gray-200 shadow-sm">
-                                        <tr>
-                                            <th className="p-4">Nutrient</th>
-                                            <th className="p-4">Age</th>
-                                            <th className="p-4">Gender</th>
-                                            <th className="p-4 text-green-600">PRI / AR</th>
-                                            <th className="p-4 text-blue-600">AI</th>
-                                            <th className="p-4 text-red-500">UL (Limite)</th>
-                                            <th className="p-4 text-center">Azioni</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody className="divide-y divide-gray-100">
-                                        {drvDB.map((row, idx) => (
-                                            <tr key={idx} className="hover:bg-gray-50 transition-colors">
-                                                <td className="p-2"><input className="w-full bg-transparent border border-transparent hover:border-gray-200 focus:bg-white focus:border-green-500 rounded px-2 py-1 font-bold text-gray-900 outline-none" value={row.Nutrient || ''} onChange={e => { const ndb = [...drvDB]; ndb[idx].Nutrient = e.target.value; setDrvDB(ndb); }} /></td>
-                                                <td className="p-2"><input className="w-full bg-transparent border border-transparent hover:border-gray-200 focus:bg-white focus:border-green-500 rounded px-2 py-1 outline-none" value={row.Age || ''} onChange={e => { const ndb = [...drvDB]; ndb[idx].Age = e.target.value; setDrvDB(ndb); }} /></td>
-                                                <td className="p-2"><input className="w-full bg-transparent border border-transparent hover:border-gray-200 focus:bg-white focus:border-green-500 rounded px-2 py-1 outline-none" value={row.Gender || ''} onChange={e => { const ndb = [...drvDB]; ndb[idx].Gender = e.target.value; setDrvDB(ndb); }} /></td>
-                                                <td className="p-2"><input className="w-full bg-transparent border border-transparent hover:border-gray-200 focus:bg-white focus:border-green-500 rounded px-2 py-1 font-bold text-green-600 outline-none" value={row.PRI || row.AR || ''} onChange={e => { const ndb = [...drvDB]; if(row.PRI) ndb[idx].PRI = e.target.value; else ndb[idx].AR = e.target.value; setDrvDB(ndb); }} /></td>
-                                                <td className="p-2"><input className="w-full bg-transparent border border-transparent hover:border-gray-200 focus:bg-white focus:border-green-500 rounded px-2 py-1 font-bold text-blue-600 outline-none" value={row.AI || ''} onChange={e => { const ndb = [...drvDB]; ndb[idx].AI = e.target.value; setDrvDB(ndb); }} /></td>
-                                                <td className="p-2"><input className="w-full bg-transparent border border-transparent hover:border-gray-200 focus:bg-white focus:border-green-500 rounded px-2 py-1 font-bold text-red-500 outline-none" value={row.UL || ''} onChange={e => { const ndb = [...drvDB]; ndb[idx].UL = e.target.value; setDrvDB(ndb); }} /></td>
-                                                <td className="p-2 text-center">
-                                                    <button onClick={() => {
-                                                        if(window.confirm("Eliminare questa riga?")) {
-                                                            const newDB = [...drvDB]; newDB.splice(idx, 1); setDrvDB(newDB);
-                                                        }
-                                                    }} className="w-8 h-8 rounded-lg bg-gray-100 hover:bg-red-100 hover:text-red-600 font-bold transition-colors">
-                                                        <i className="ph-bold ph-trash"></i>
-                                                    </button>
-                                                </td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
-                            )}
-                        </div>
-                        <div className="p-4 bg-gray-50 border-t border-gray-100 flex justify-center">
-                            <button onClick={() => {
-                                setDrvDB([{ Nutrient: "Nuovo Nutriente", Age: "18-39", Gender: "All", PRI: "10 mg/day", AI: "ND", UL: "ND" }, ...drvDB]);
-                            }} className="px-6 py-2 bg-black text-white rounded-xl text-xs font-bold hover:bg-gray-800 transition-colors shadow-md">
-                                + Aggiungi Nuova Riga Manualmente
-                            </button>
+                                
+                                {/* BARRA DI RICERCA */}
+                                <div className="relative w-full md:w-72">
+                                    <i className="ph-bold ph-magnifying-glass absolute left-4 top-1/2 -translate-y-1/2 text-gray-400"></i>
+                                    <input 
+                                        type="text" 
+                                        placeholder="Cerca nutriente o popolazione..." 
+                                        value={drvSearch}
+                                        onChange={(e) => setDrvSearch(e.target.value)}
+                                        className="w-full pl-11 pr-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm font-bold focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none transition-all"
+                                    />
+                                </div>
+
+                                <div className="flex gap-2">
+                                    <button onClick={() => drvFileInputRef.current.click()} className="px-4 py-2.5 bg-white border border-gray-200 rounded-xl text-xs font-bold hover:bg-gray-50 transition-all flex items-center gap-2 shadow-sm group">
+                                        <i className="ph-bold ph-upload-simple group-hover:text-blue-500 transition-colors text-lg"></i> Importa JSON
+                                    </button>
+                                    <input type="file" ref={drvFileInputRef} accept=".json" style={{ display: 'none' }} onChange={e => {
+                                        const file = e.target.files[0];
+                                        if (file) {
+                                            const reader = new FileReader();
+                                            reader.onload = (evt) => { setDrvDB(JSON.parse(evt.target.result)); alert("Database EFSA Caricato con successo!"); };
+                                            reader.readAsText(file);
+                                        }
+                                    }} />
+                                    
+                                    <button onClick={() => {
+                                        const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(drvDB, null, 2));
+                                        const a = document.createElement('a'); a.href = dataStr; a.download = "drv_custom.json"; a.click();
+                                    }} className="px-4 py-2.5 bg-black text-white border border-black rounded-xl text-xs font-bold hover:bg-gray-800 transition-all flex items-center gap-2 shadow-md">
+                                        <i className="ph-bold ph-download-simple text-lg"></i> Esporta DB
+                                    </button>
+
+                                    <button onClick={() => { setIsDrvEditorOpen(false); setDrvSearch(''); }} className="w-10 h-10 rounded-xl bg-gray-100 hover:bg-red-100 hover:text-red-600 text-gray-500 flex items-center justify-center ml-2 transition-colors">
+                                        <i className="ph-bold ph-x text-lg"></i>
+                                    </button>
+                                </div>
+                            </div>
+
+                            {/* TABELLA DATI IN LINEA */}
+                            <div className="flex-1 overflow-auto p-6 bg-[#FAFAFC] custom-scrollbar">
+                                <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+                                    {filteredDrv.length === 0 ? (
+                                        <div className="p-12 text-center text-gray-400">
+                                            <i className="ph-thin ph-magnifying-glass text-5xl mb-3"></i>
+                                            <p className="font-bold text-sm">Nessun record trovato {drvSearch ? `per "${drvSearch}"` : 'nel database'}.</p>
+                                        </div>
+                                    ) : (
+                                        <table className="w-full text-left text-xs">
+                                            <thead className="bg-gray-50 sticky top-0 z-10 border-b border-gray-200 shadow-sm">
+                                                <tr>
+                                                    <th className="p-4 font-black text-gray-400 uppercase tracking-widest text-[10px]">Nutrient</th>
+                                                    <th className="p-4 font-black text-gray-400 uppercase tracking-widest text-[10px]">Population</th>
+                                                    <th className="p-4 font-black text-gray-400 uppercase tracking-widest text-[10px]">Age / Gender</th>
+                                                    <th className="p-4 font-black text-green-600 uppercase tracking-widest text-[10px]">PRI / AR</th>
+                                                    <th className="p-4 font-black text-blue-600 uppercase tracking-widest text-[10px]">AI</th>
+                                                    <th className="p-4 font-black text-red-500 uppercase tracking-widest text-[10px]">UL (Max)</th>
+                                                    <th className="p-4 font-black text-gray-400 uppercase tracking-widest text-[10px] text-center">Azioni</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-gray-100">
+                                                {filteredDrv.map((row, idx) => {
+                                                    // Troviamo l'indice reale nel database originale per le modifiche
+                                                    const realIdx = drvDB.indexOf(row);
+                                                    return (
+                                                        <tr key={realIdx} className="hover:bg-blue-50/30 transition-colors group">
+                                                            <td className="p-2">
+                                                                <input className="w-full bg-transparent border border-transparent hover:border-gray-200 focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-100 rounded-lg px-3 py-2 font-bold text-gray-900 outline-none transition-all truncate" value={row.Nutrient || ''} onChange={e => { const ndb = [...drvDB]; ndb[realIdx].Nutrient = e.target.value; setDrvDB(ndb); }} title={row.Nutrient}/>
+                                                            </td>
+                                                            <td className="p-2">
+                                                                <input className="w-full bg-transparent border border-transparent hover:border-gray-200 focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-100 rounded-lg px-3 py-2 font-medium text-gray-600 outline-none transition-all truncate" value={row["Target population"] || ''} onChange={e => { const ndb = [...drvDB]; ndb[realIdx]["Target population"] = e.target.value; setDrvDB(ndb); }} title={row["Target population"]} />
+                                                            </td>
+                                                            <td className="p-2">
+                                                                <div className="flex gap-1">
+                                                                    <input className="w-1/2 bg-transparent border border-transparent hover:border-gray-200 focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-100 rounded-lg px-2 py-2 font-medium text-gray-600 outline-none transition-all text-center" value={row.Age || ''} onChange={e => { const ndb = [...drvDB]; ndb[realIdx].Age = e.target.value; setDrvDB(ndb); }} placeholder="Age" />
+                                                                    <input className="w-1/2 bg-transparent border border-transparent hover:border-gray-200 focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-100 rounded-lg px-2 py-2 font-medium text-gray-600 outline-none transition-all text-center" value={row.Gender || ''} onChange={e => { const ndb = [...drvDB]; ndb[realIdx].Gender = e.target.value; setDrvDB(ndb); }} placeholder="Gender" />
+                                                                </div>
+                                                            </td>
+                                                            <td className="p-2">
+                                                                <input className="w-full bg-transparent border border-transparent hover:border-green-200 focus:bg-white focus:border-green-500 focus:ring-2 focus:ring-green-100 rounded-lg px-3 py-2 font-black text-green-600 outline-none transition-all" value={row.PRI || row.AR || ''} onChange={e => { const ndb = [...drvDB]; if(row.PRI !== undefined) ndb[realIdx].PRI = e.target.value; else ndb[realIdx].AR = e.target.value; setDrvDB(ndb); }} placeholder="ND" />
+                                                            </td>
+                                                            <td className="p-2">
+                                                                <input className="w-full bg-transparent border border-transparent hover:border-blue-200 focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-100 rounded-lg px-3 py-2 font-black text-blue-600 outline-none transition-all" value={row.AI || ''} onChange={e => { const ndb = [...drvDB]; ndb[realIdx].AI = e.target.value; setDrvDB(ndb); }} placeholder="ND" />
+                                                            </td>
+                                                            <td className="p-2">
+                                                                <input className="w-full bg-transparent border border-transparent hover:border-red-200 focus:bg-white focus:border-red-500 focus:ring-2 focus:ring-red-100 rounded-lg px-3 py-2 font-black text-red-500 outline-none transition-all" value={row.UL || ''} onChange={e => { const ndb = [...drvDB]; ndb[realIdx].UL = e.target.value; setDrvDB(ndb); }} placeholder="ND" />
+                                                            </td>
+                                                            <td className="p-2 text-center">
+                                                                <button onClick={() => {
+                                                                    if(window.confirm("Eliminare definitivamente questo record?")) {
+                                                                        const newDB = [...drvDB]; newDB.splice(realIdx, 1); setDrvDB(newDB);
+                                                                    }
+                                                                }} className="w-8 h-8 rounded-lg bg-white border border-gray-200 text-gray-400 hover:bg-red-50 hover:text-red-600 hover:border-red-200 font-bold transition-all shadow-sm opacity-0 group-hover:opacity-100">
+                                                                    <i className="ph-bold ph-trash"></i>
+                                                                </button>
+                                                            </td>
+                                                        </tr>
+                                                    );
+                                                })}
+                                            </tbody>
+                                        </table>
+                                    )}
+                                </div>
+                            </div>
+
+                            {/* FOOTER PER AGGIUNTA MANUALE */}
+                            <div className="p-4 bg-white border-t border-gray-100 flex justify-center z-10 shrink-0 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.02)]">
+                                <button onClick={() => {
+                                    setDrvDB([{ Nutrient: "Nuovo Nutriente", "Target population": "Adults", Age: "18-39", Gender: "All", PRI: "10 mg/day", AI: "ND", UL: "ND" }, ...drvDB]);
+                                    // Resetta la ricerca se stai aggiungendo un nuovo record, così lo vedi subito in cima
+                                    setDrvSearch('');
+                                }} className="px-6 py-3 border border-gray-200 bg-gray-50 text-gray-700 rounded-xl text-xs font-bold hover:bg-gray-100 hover:border-gray-300 transition-all flex items-center gap-2">
+                                    <i className="ph-bold ph-plus text-lg"></i> Crea Nuova Regola DRV Manuale
+                                </button>
+                            </div>
                         </div>
                     </div>
-                </div>
-            )}
+                );
+            })()}
 
             
         </div>
