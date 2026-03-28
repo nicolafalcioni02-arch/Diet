@@ -1,0 +1,897 @@
+import React, { useState, useEffect, useRef } from 'react';
+
+
+// --- DATABASE ALIMENTI DI DEFAULT ---
+// Sostituisce il defaultDB degli esercizi.
+const defaultFoodDB = [
+    { category: "Proteine", name: "Petto di Pollo", kcal: 165, p: 31, c: 0, f: 3.6 },
+    { category: "Carboidrati", name: "Riso Basmati", kcal: 350, p: 8, c: 78, f: 0.5 },
+    { category: "Grassi", name: "Olio EVO", kcal: 899, p: 0, c: 0, f: 99.9 },
+    { category: "Frutta", name: "Mela", kcal: 52, p: 0.3, c: 14, f: 0.2 },
+    { category: "Latticini", name: "Yogurt Greco 0%", kcal: 57, p: 10, c: 4, f: 0 }
+];
+
+export const DietPlan = ({ patient }) => {
+    // --- STATI PRINCIPALI ---
+    
+    // Rappresenta l'intera struttura della dieta: Array di Giorni -> Array di Pasti -> Array di Alimenti
+    const [dietDays, setDietDays] = useState(() => {
+        const stored = localStorage.getItem('diet_plan_data');
+        return stored ? JSON.parse(stored) : [];
+    });
+
+    // Sostituisce isSettingsOpen. Gestisce l'apertura del modale del Database Alimenti.
+    const [isDbOpen, setIsDbOpen] = useState(false);
+    
+    // Sostituisce activeDayInfo. Identifica quale pasto e quale giorno sono attualmente aperti nel modale centrale.
+    const [activeMealInfo, setActiveMealInfo] = useState(null); // { dayId, mealId }
+
+    // Gestione del database alimenti personalizzato, salvato in locale.
+    const [foodDB, setFoodDB] = useState(() => {
+        const stored = localStorage.getItem('diet_food_db');
+        return stored ? JSON.parse(stored) : defaultFoodDB;
+    });
+
+    // Stati per la ricerca e l'inserimento nel database
+    const [dbSearch, setDbSearch] = useState('');
+    const [newFood, setNewFood] = useState({ name: '', category: '', kcal: '', p: '', c: '', f: '' });
+    
+    // Autocompletamento per la ricerca degli alimenti durante la compilazione del pasto
+    const [suggestions, setSuggestions] = useState({});
+
+    // Target Nutrizionali Globali (Kcal totali e percentuali dei macronutrienti)
+    const [targets, setTargets] = useState(() => {
+        const stored = localStorage.getItem('diet_targets');
+        return stored ? JSON.parse(stored) : { kcal: 2000, p: 30, c: 40, f: 30 };
+    });
+
+    // Ref per Import JSON del database
+    const fileInputRef = useRef(null);
+
+    // --- SALVATAGGIO IN LOCAL STORAGE ---
+    // Ogni volta che uno di questi stati cambia, viene salvato per evitare perdite di dati
+    useEffect(() => {
+        localStorage.setItem('diet_food_db', JSON.stringify(foodDB));
+    }, [foodDB]);
+
+    useEffect(() => {
+        localStorage.setItem('diet_plan_data', JSON.stringify(dietDays));
+    }, [dietDays]);
+
+    useEffect(() => {
+        localStorage.setItem('diet_targets', JSON.stringify(targets));
+    }, [targets]);
+
+    // Setup iniziale: se non ci sono giorni, crea automaticamente il Giorno 1
+    useEffect(() => {
+        if (dietDays.length === 0) {
+            addNewDay();
+        }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    // --- FUNZIONI CORE ---
+    
+    // Generatore di ID univoci per drag and drop e chiavi React
+    const genId = () => 'id-' + Math.random().toString(36).substr(2, 9);
+
+    // --- GESTIONE GIORNI (Equivalente alla gestione Settimane nel TrainingPlan) ---
+
+    // Aggiunge un nuovo Giorno con tre pasti di default vuoti
+    const addNewDay = () => {
+        setDietDays(prev => {
+            const newDayId = genId();
+            return [...prev, {
+                id: newDayId,
+                title: `Giorno ${prev.length + 1}`,
+                meals: [
+                    { id: genId(), title: 'Colazione', items: [] },
+                    { id: genId(), title: 'Pranzo', items: [] },
+                    { id: genId(), title: 'Cena', items: [] }
+                ]
+            }];
+        });
+    };
+
+    // Duplica un Giorno intero (Deep Copy per evitare conflitti di reference)
+    const duplicateDay = (dayId) => {
+        setDietDays(prev => {
+            const dayToCopy = prev.find(d => d.id === dayId);
+            if (!dayToCopy) return prev;
+            
+            const newDay = JSON.parse(JSON.stringify(dayToCopy)); 
+            newDay.id = genId();
+            newDay.title = `${newDay.title} (Copia)`;
+            
+            // Rigenera tutti gli ID interni per Pasti e Alimenti
+            newDay.meals.forEach(m => {
+                m.id = genId();
+                m.items.forEach(it => it.id = genId());
+            });
+            
+            return [...prev, newDay];
+        });
+    };
+
+    // Rimuove un Giorno specifico
+    const removeDay = (id) => setDietDays(prev => prev.filter(d => d.id !== id));
+    
+    // Aggiorna il titolo di un Giorno
+    const updateDayTitle = (id, title) => setDietDays(prev => prev.map(d => d.id === id ? { ...d, title } : d));
+
+    // --- GESTIONE PASTI (Equivalente alla gestione Giorni nel TrainingPlan) ---
+
+    // Aggiunge un nuovo Pasto vuoto a un Giorno specifico
+    const addMeal = (dayId, title = 'Nuovo Pasto') => {
+        setDietDays(prev => prev.map(d => d.id === dayId ? {
+            ...d, 
+            meals: [...d.meals, {
+                id: genId(), 
+                title: title, 
+                items: [] // Inizializza l'array degli alimenti vuoto
+            }]
+        } : d));
+    };
+
+    // Duplica un Pasto specifico all'interno dello stesso Giorno
+    const duplicateMeal = (dayId, mealId) => {
+        setDietDays(prev => prev.map(d => {
+            if (d.id !== dayId) return d;
+            
+            const mealToCopy = d.meals.find(m => m.id === mealId);
+            if (!mealToCopy) return d;
+            
+            const newMeal = JSON.parse(JSON.stringify(mealToCopy));
+            newMeal.id = genId();
+            newMeal.title = `${newMeal.title} (Copia)`;
+            
+            // Rigenera gli ID univoci per gli alimenti clonati
+            newMeal.items.forEach(item => {
+                item.id = genId();
+            });
+            
+            return { ...d, meals: [...d.meals, newMeal] };
+        }));
+    };
+
+    // Rimuove un Pasto da un Giorno
+    const removeMeal = (dayId, mealId) => setDietDays(prev => prev.map(d => d.id === dayId ? { 
+        ...d, 
+        meals: d.meals.filter(m => m.id !== mealId) 
+    } : d));
+    
+    // Aggiorna il titolo di un Pasto (es. da "Pasto 1" a "Spuntino")
+    const updateMealTitle = (dayId, mealId, title) => setDietDays(prev => prev.map(d => d.id === dayId ? { 
+        ...d, 
+        meals: d.meals.map(m => m.id === mealId ? { ...m, title } : m) 
+    } : d));
+
+    // --- GESTIONE ALIMENTI (Equivalente alla gestione Esercizi nel TrainingPlan) ---
+
+    // Aggiunge un nuovo Alimento a un Pasto. Imposta un peso di default di 100g e valori nutrizionali a 0.
+
+    // --- GESTIONE DATABASE ALIMENTI ---
+
+    // Aggiunge un nuovo alimento al database locale
+    const addFoodToDB = () => {
+        if (newFood.name && newFood.category) {
+            setFoodDB([{ 
+                name: newFood.name, 
+                category: newFood.category, 
+                kcal: Number(newFood.kcal) || 0,
+                p: Number(newFood.p) || 0,
+                c: Number(newFood.c) || 0,
+                f: Number(newFood.f) || 0
+            }, ...foodDB]);
+            
+            // Pulisce il form dopo l'inserimento
+            setNewFood({ name: '', category: '', kcal: '', p: '', c: '', f: '' });
+        } else {
+            alert("Inserisci almeno Nome e Categoria dell'alimento.");
+        }
+    };
+
+    // Aggiorna un campo specifico di un alimento esistente nel database
+    const updateDbFood = (index, field, value) => {
+        const newDb = [...foodDB];
+        newDb[index][field] = field === 'name' || field === 'category' ? value : Number(value);
+        setFoodDB(newDb);
+    };
+
+    // Elimina un alimento dal database (con richiesta di conferma)
+    const deleteFoodDB = (index) => {
+        if(window.confirm("Sei sicuro di voler eliminare questo alimento dal database?")) {
+            const newDb = [...foodDB];
+            newDb.splice(index, 1);
+            setFoodDB(newDb);
+        }
+    };
+
+    // Esporta l'intero database come file JSON per backup o condivisione
+    const exportJSON = () => {
+        const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(foodDB, null, 2));
+        const a = document.createElement('a'); 
+        a.href = dataStr; 
+        a.download = "nutri_db_backup.json"; 
+        a.click();
+    };
+
+    // Importa un file JSON per sovrascrivere o ripristinare il database
+    const importJSON = (e) => {
+        const file = e.target.files[0];
+        if(!file) return;
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+            try { 
+                setFoodDB(JSON.parse(ev.target.result)); 
+                alert("Database importato con successo!"); 
+            } catch(err) { 
+                alert("Errore: Il file non è un JSON valido."); 
+            }
+        };
+        reader.readAsText(file);
+    };
+
+    // Ripristina il database ai 5 alimenti di default iniziali
+    const resetDatabase = () => {
+        if(window.confirm("Attenzione: Vuoi ripristinare il database ai valori di default? Perderai tutti gli alimenti personalizzati.")) {
+            setFoodDB([...defaultFoodDB]);
+        }
+    };
+
+    // --- CALCOLI TARGET E PROGRESSI ---
+    
+    // Trova il giorno attualmente attivo in base al pasto selezionato
+    const activeDay = dietDays.find(d => d.id === activeMealInfo?.dayId) || dietDays[0];
+    
+    // Calcola il totale dei macronutrienti per l'intera giornata attiva
+    const activeDayTotals = activeDay ? calculateTotals(activeDay.meals.flatMap(m => m.items)) : { kcal: 0, p: 0, c: 0, f: 0 };
+
+    // Converte le percentuali dei target (es. 40% carbo) in grammi effettivi basati sulle Kcal totali
+    // Proteine e Carbo: 4 kcal per grammo | Grassi: 9 kcal per grammo
+    const targetGrams = {
+        p: Math.round((targets.kcal * (targets.p / 100)) / 4),
+        c: Math.round((targets.kcal * (targets.c / 100)) / 4),
+        f: Math.round((targets.kcal * (targets.f / 100)) / 9),
+    };
+
+    // --- COMPONENTE AUSILIARIO: PROGRESS BAR ---
+    // Definito all'interno per accedere comodamente agli stili
+    const renderProgressBar = (label, current, max, color) => {
+        const pct = Math.min((current / (max || 1)) * 100, 100) || 0;
+        const isOver = current > max;
+        return (
+            <div style={{ marginBottom: '12px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', fontWeight: 700, color: '#86868B', textTransform: 'uppercase', marginBottom: '4px' }}>
+                    <span>{label}</span>
+                    <span style={{ color: isOver ? '#FF3B30' : '#1D1D1F' }}>
+                        {current.toFixed(0)} / {max}
+                    </span>
+                </div>
+                <div style={{ width: '100%', height: '6px', background: '#E5E5EA', borderRadius: '3px', overflow: 'hidden' }}>
+                    <div style={{ width: `${pct}%`, height: '100%', borderRadius: '3px', background: isOver ? '#FF3B30' : color, transition: 'width 0.4s ease' }} />
+                </div>
+            </div>
+        );
+    };
+
+    // --- INIZIO RENDER COMPONENTE ---
+    return (
+        <div style={{
+            display: 'flex', height: '100%', minHeight: '80vh', backgroundColor: '#F5F5F7',
+            fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif',
+            color: '#1D1D1F', margin: '-16px', textAlign: 'left'
+        }}>
+            
+            {/* STILI CSS INIETTATI E ADATTATI AL TEMA NUTRIZIONE (VERDE #00C853) */}
+            <style>{`
+                /* SIDEBAR FISSA E LUSSUOSA */
+                .t-sidebar { 
+                    width: 300px; 
+                    background: rgba(255, 255, 255, 0.85); 
+                    backdrop-filter: blur(20px); 
+                    border-right: 2px solid rgba(0,0,0,0.05); 
+                    display: flex; flex-direction: column; 
+                    padding: 20px 15px; flex-shrink: 0; 
+                    z-index: 50; position: sticky; top: 0; height: 85vh; 
+                    box-shadow: 4px 0 24px rgba(0,0,0,0.02);
+                }
+                .t-nav-list { list-style: none; padding: 0; margin: 0; flex: 1; overflow-y: auto; scrollbar-width: none; padding-right: 5px; }
+                .t-nav-list::-webkit-scrollbar { display: none; }
+                
+                /* FOOTER DELLA SIDEBAR */
+                .t-sidebar-footer { 
+                    margin-top: auto; position: sticky; bottom: 0; 
+                    background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(12px); 
+                    padding: 20px 0; border-top: 1px solid rgba(0,0,0,0.05); 
+                    z-index: 100; display: flex; flex-direction: column; gap: 10px;
+                }
+                
+                /* PULSANTI E AZIONI */
+                .t-btn-sidebar-action { 
+                    width: 100%; padding: 12px; border-radius: 12px; border: none; font-weight: 600; font-size: 13px; 
+                    cursor: pointer; display: flex; align-items: center; gap: 8px; justify-content: center;
+                    transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); 
+                }
+                .t-btn-new { background: #00C853; color: white; }
+                .t-btn-new:hover { transform: translateY(-2px); box-shadow: 0 8px 16px rgba(0, 200, 83, 0.2); }
+                .t-btn-settings { background: transparent; color: #86868B; border: 1px dashed #E5E5EA; }
+                .t-btn-settings:hover { background: #F5F5F7; color: #1D1D1F; transform: translateY(-2px); }
+
+                /* LISTA GIORNI E PASTI (Effetti hover e attivi) */
+                .premium-item {
+                    padding: 10px 15px; border-radius: 12px; cursor: grab; margin-bottom: 5px; 
+                    font-weight: 600; font-size: 14px; color: #86868B; display: flex; justify-content: space-between;
+                    transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+                    border: 1px solid transparent; align-items: center;
+                }
+                .premium-item:active { cursor: grabbing; transform: scale(0.96); opacity: 0.8; }
+                .premium-item:hover { 
+                    background: #F2FFF7; box-shadow: 0 4px 15px rgba(0,0,0,0.04); 
+                    transform: translateX(4px); border-color: #E8F5E9; color: #00C853; 
+                }
+                .premium-item.active-meal {
+                    background: #E8F5E9; color: #00C853; border-color: #C8E6C9;
+                }
+                
+                .premium-subitem { margin-left: 15px; border-left: 2px solid #E5E5EA; padding-left: 10px; transition: border-color 0.3s ease; }
+                .premium-subitem:hover { border-color: #00C853; }
+
+                /* AZIONI A SCOMPARSA (Copia, Elimina) */
+                .hover-actions { display: flex; gap: 8px; opacity: 0; transform: translateX(10px); transition: all 0.2s ease; margin-left: auto; }
+                .premium-item:hover .hover-actions { opacity: 1; transform: translateX(0); }
+                .mini-action { color: #86868B; transition: 0.2s; cursor: pointer; font-size: 13px; font-weight: 700; padding: 2px 6px; border-radius: 4px; background: rgba(0,0,0,0.05); }
+                .mini-action:hover { color: #00C853; background: #E8F5E9; transform: scale(1.05); }
+                .mini-action.del:hover { color: #FF3B30; background: #FFF0F0; }
+                .drag-over-active { background: #E8F5E9 !important; border: 1px dashed #00C853 !important; transform: scale(1.02); }
+
+                /* DASHBOARD E SCHEDE CENTRALI */
+                .t-main-content { flex: 1; overflow-y: auto; padding: 40px; scroll-behavior: smooth; }
+                .t-container-wrapper { max-width: 950px; margin: 0 auto; padding-bottom: 100px; }
+
+                .t-client-header-card { 
+                    background: rgba(255,255,255,0.8); backdrop-filter: blur(20px); padding: 25px; border-radius: 20px; 
+                    box-shadow: 0 8px 32px rgba(0,0,0,0.04); margin-bottom: 40px; display: grid; grid-template-columns: 1fr 1fr 150px; 
+                    gap: 20px; border: 1px solid rgba(255,255,255,0.8); 
+                }
+                .t-input-floating label { font-size: 10px; text-transform: uppercase; color: #86868B; font-weight: 700; display: block; margin-bottom: 5px; margin-left: 5px; }
+                .t-input-floating input { width: 100%; padding: 12px 16px; border-radius: 12px; border: 1px solid #E5E5EA; font-size: 14px; outline: none; transition: all 0.3s ease; background: #F9F9FB; }
+                .t-input-floating input:focus { border-color: #00C853; background: #FFFFFF; box-shadow: 0 0 0 4px rgba(0,200,83,0.1); }
+
+                /* BOTTONI ICONA */
+                .t-icon-btn { 
+                    width: 36px; height: 36px; border-radius: 50%; border: 1px solid #E5E5EA; background: white; 
+                    display: flex; align-items: center; justify-content: center; cursor: pointer; color: #86868B; 
+                    margin-left: 8px; transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); outline: none; 
+                }
+                .t-icon-btn:hover { border-color: #00C853; color: #00C853; transform: scale(1.1); }
+                .t-icon-btn.danger:hover { border-color: #FF3B30; color: #FF3B30; }
+
+                /* RIGHE DEGLI ALIMENTI (Ex Esercizi) */
+                .t-exercise-item { 
+                    background: #F9F9FB; border-radius: 16px; padding: 18px; margin-bottom: 12px; position: relative; 
+                    border: 1px solid transparent; transition: all 0.3s ease; 
+                }
+                .t-exercise-item:focus-within { background: #FFFFFF; border-color: #E8F5E9; box-shadow: 0 8px 24px rgba(0,200,83,0.08); transform: scale(1.01); z-index: 2; }
+                .t-ex-input { border: none; padding: 10px 12px; border-radius: 8px; font-size: 16px; font-weight: 700; width: 100%; background: transparent; outline: none; transition: background 0.3s; }
+                .t-ex-input:focus { background: rgba(0,0,0,0.03); }
+
+                /* AUTOCOMPLETAMENTO */
+                .t-suggestions-list { 
+                    position: absolute; top: 100%; left: 0; width: 100%; background: rgba(255,255,255,0.98); backdrop-filter: blur(10px); 
+                    border-radius: 12px; box-shadow: 0 20px 50px rgba(0,0,0,0.15); border: 1px solid rgba(0,0,0,0.05); z-index: 100; max-height: 250px; overflow-y: auto; margin-top: 4px; 
+                }
+                .t-suggestion-item { padding: 12px 18px; font-size: 14px; cursor: pointer; border-bottom: 1px solid #f0f0f0; display: flex; flex-direction: column; transition: background 0.2s; }
+                .t-suggestion-item:hover { background: #F2FFF7; color: #00C853; padding-left: 22px; }
+                .t-suggestion-tag { font-size: 10px; color: #999; text-transform: uppercase; font-weight: 800; margin-top: 4px; }
+
+                /* TABELLE MACRONUTRIENTI */
+                .t-sets-table { width: 100%; border-collapse: collapse; font-size: 14px; margin-top: 8px; }
+                .t-sets-table th { text-align: left; color: #86868B; font-size: 11px; text-transform: uppercase; padding: 8px 5px; font-weight: 800; border-bottom: 1px solid transparent; }
+                .t-sets-table td { padding: 6px 4px; vertical-align: middle; }
+                .t-sets-table input { width: 100%; padding: 8px 10px; border: 1px solid transparent; border-radius: 8px; font-size: 14px; background: transparent; font-family: inherit; outline: none; transition: all 0.2s; font-weight: 700; }
+                .t-sets-table input:focus { background: #FFFFFF; border-color: #00C853; box-shadow: 0 0 0 3px rgba(0,200,83,0.1); }
+                .t-sets-table input:hover:not(:focus) { background: rgba(0,0,0,0.03); }
+
+                .t-set-badge { background: #E5E5EA; color: #86868B; font-weight: 800; font-size: 12px; width: 26px; height: 26px; display: flex; align-items: center; justify-content: center; border-radius: 50%; box-shadow: inset 0 2px 4px rgba(0,0,0,0.05); }
+
+                /* BOTTONE STAMPA GALLEGGIANTE */
+                .t-fab-print { 
+                    position: fixed; bottom: 40px; right: 40px; background: linear-gradient(135deg, #1D1D1F 0%, #434345 100%); 
+                    color: white; width: 64px; height: 64px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 24px;
+                    box-shadow: 0 15px 30px rgba(0,0,0,0.3); cursor: pointer; z-index: 100; border: none; outline: none; 
+                    transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275); 
+                }
+                .t-fab-print:hover { transform: scale(1.1) rotate(5deg); box-shadow: 0 20px 40px rgba(0,0,0,0.4); background: linear-gradient(135deg, #00C853 0%, #009624 100%); }
+
+                /* OVERLAY E MODALI (POP-UP) */
+                .modal-backdrop {
+                    position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+                    background: rgba(0, 0, 0, 0.3); backdrop-filter: blur(10px); z-index: 9999;
+                    display: flex; align-items: center; justify-content: center; padding: 40px;
+                    animation: fadeIn 0.3s ease;
+                }
+                .modal-window {
+                    background: #FFFFFF; width: 100%; max-width: 1000px; height: 90vh;
+                    border-radius: 32px; box-shadow: 0 30px 90px rgba(0,0,0,0.3);
+                    border: 1px solid rgba(255,255,255,0.3); display: flex; flex-direction: column;
+                    overflow: hidden; transform-origin: center; animation: scaleUp 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+                }
+
+                @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+                @keyframes scaleUp { from { opacity: 0; transform: scale(0.9) translateY(20px); } to { opacity: 1; transform: scale(1) translateY(0); } }
+
+                /* MEDIA QUERY PER LA STAMPA PULITA */
+                @media print {
+                    @page { size: A4; margin: 10mm; }
+                    body { background: white; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; font-size: 10pt; height: auto; overflow: visible; display: block; }
+                    .t-sidebar, .t-fab-print, .t-icon-btn, .t-btn-sidebar-action, .t-suggestions-list, .modal-backdrop, .hover-actions { display: none !important; }
+                    .t-main-content { padding: 0; margin: 0; width: 100%; overflow: visible; }
+                    .t-container-wrapper { max-width: 100%; margin: 0; padding: 0; }
+                    .t-client-header-card { padding: 15px; margin-bottom: 20px; box-shadow: none; border: 1px solid #E5E5EA; background: white; grid-template-columns: 1fr 1fr 1fr; gap: 10px; border-radius: 12px; }
+                    .t-client-header-card input { border: none; padding: 0; font-weight: bold; font-size: 11pt; color: black; background: transparent; }
+                    .t-exercise-item { background-color: #FFFFFF !important; border: 1px solid #E5E5EA !important; border-radius: 8px !important; padding: 8px 12px !important; margin-bottom: 8px !important; box-shadow: none !important; transform: none !important; }
+                    .t-ex-input { background: transparent; box-shadow: none; padding: 0; font-size: 11pt; color: black; font-weight: 700; }
+                    .t-sets-table th { color: #888; padding-bottom: 2px; border-bottom: 1px solid #E5E5EA; }
+                    .t-sets-table td { border-bottom: 1px solid #F5F5F7; padding: 4px; }
+                    .t-sets-table input { border: none !important; background: transparent !important; color: #000; font-weight: 500; padding: 0; }
+                }
+            `}</style>
+
+            {/* --- SIDEBAR DI NAVIGAZIONE --- */}
+            <nav className="t-sidebar" style={{ paddingBottom: 0 }}>
+                
+                {/* 1. PANNELLO LIVE TRACKING (Fisso in cima all'indice) */}
+                <div style={{ 
+                    marginBottom: '20px', padding: '15px', background: '#FFFFFF', 
+                    borderRadius: '16px', border: '1px solid #E5E5EA', 
+                    boxShadow: '0 4px 15px rgba(0,0,0,0.03)', flexShrink: 0 
+                }}>
+                    <div style={{ fontSize: '11px', fontWeight: 800, color: '#1D1D1F', textTransform: 'uppercase', marginBottom: '15px', letterSpacing: '0.5px' }}>
+                        Tracking: {activeDay?.title || '-'}
+                    </div>
+                    {/* Utilizza la funzione ausiliaria creata nella Parte 3 */}
+                    {renderProgressBar("Kcal", activeDayTotals.kcal, targets.kcal, "#1D1D1F")}
+                    {renderProgressBar("Carbo", activeDayTotals.c, targetGrams.c, "#1D1D1F")}
+                    {renderProgressBar("Proteine", activeDayTotals.p, targetGrams.p, "#00C853")}
+                    {renderProgressBar("Grassi", activeDayTotals.f, targetGrams.f, "#86868B")}
+                </div>
+
+                {/* 2. INDICE DRAG & DROP DEI GIORNI E PASTI */}
+                <ul className="t-nav-list" style={{ paddingBottom: '20px' }}>
+                    {dietDays.map((day, dIndex) => (
+                        <div key={day.id} 
+                            draggable 
+                            onDragStart={(e) => handleDragStart(e, 'day', { dayId: day.id })}
+                            onDragEnd={handleDragEnd}
+                            onDragOver={(e) => handleDragOver(e, 'day', day.id)}
+                            onDragLeave={() => setDragOverId(null)}
+                            onDrop={(e) => { handleDrop(e, 'day', { dayId: day.id }); setDragOverId(null); }}
+                            className={dragOverId === day.id ? 'drag-over-active' : ''}
+                            style={{ marginBottom: '10px', borderRadius: '12px', transition: '0.2s' }}>
+                            
+                            {/* LIVELLO 1: IL GIORNO (Ex Settimana) */}
+                            <li className="premium-item" style={{ cursor: 'grab', color: '#1D1D1F' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', width: '100%' }}>
+                                    <span style={{ fontWeight: 800, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                        {day.title || `Giorno ${dIndex + 1}`}
+                                    </span>
+                                    {/* MENU HOVER A DESTRA PER IL GIORNO */}
+                                    <div className="hover-actions">
+                                        <span className="mini-action" onClick={(e) => { e.stopPropagation(); duplicateDay(day.id); }}>Copia</span>
+                                        <span className="mini-action del" onClick={(e) => { e.stopPropagation(); removeDay(day.id); }}>Del</span>
+                                    </div>
+                                </div>
+                            </li>
+
+                            {/* LIVELLO 2: I PASTI DEL GIORNO (Ex Giorni della Settimana) */}
+                            <div className="premium-subitem">
+                                {day.meals && day.meals.map((meal, mIndex) => {
+                                    const isSelected = activeMealInfo?.mealId === meal.id;
+
+                                    return (
+                                        <div key={meal.id}
+                                            draggable 
+                                            onDragStart={(e) => handleDragStart(e, 'meal', { dayId: day.id, mealId: meal.id })}
+                                            onDragEnd={handleDragEnd}
+                                            onDragOver={(e) => handleDragOver(e, 'meal', meal.id)}
+                                            onDragLeave={() => setDragOverId(null)}
+                                            onDrop={(e) => { handleDrop(e, 'meal', { dayId: day.id, mealId: meal.id }); setDragOverId(null); }}
+                                            className={dragOverId === meal.id ? 'drag-over-active' : ''}
+                                            style={{ borderRadius: '8px', transition: '0.2s', marginBottom: '2px' }}>
+                                            
+                                            <li className={`premium-item ${isSelected ? 'active-meal' : ''}`}
+                                                style={{ padding: '8px 10px', fontSize: '13px', cursor: 'pointer' }} 
+                                                onClick={() => setActiveMealInfo({ dayId: day.id, mealId: meal.id })}>
+                                                
+                                                <div style={{ display: 'flex', alignItems: 'center', width: '100%' }}>
+                                                    <span style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: isSelected ? 800 : 600 }}>
+                                                        {meal.title || `Pasto ${mIndex + 1}`}
+                                                    </span>
+                                                    
+                                                    {/* MENU HOVER A DESTRA PER IL PASTO */}
+                                                    <div className="hover-actions">
+                                                        <span className="mini-action" onClick={(e) => { e.stopPropagation(); duplicateMeal(day.id, meal.id); }}>Copia</span>
+                                                        <span className="mini-action del" onClick={(e) => { e.stopPropagation(); removeMeal(day.id, meal.id); }}>Del</span>
+                                                    </div>
+                                                </div>
+                                            </li>
+                                        </div>
+                                    );
+                                })}
+                                
+                                {/* BOTTONE "AGGIUNGI PASTO" ALLA FINE DEL GIORNO */}
+                                <div 
+                                    onClick={() => addMeal(day.id)}
+                                    style={{ padding: '6px 10px', fontSize: '12px', color: '#00C853', cursor: 'pointer', fontWeight: 700, marginTop: '4px' }}>
+                                    + Aggiungi Pasto
+                                </div>
+                            </div>
+                        </div>
+                    ))}
+                </ul>
+                
+                {/* 3. FOOTER FISSO DELLA SIDEBAR (Pulsanti globali) */}
+                <div className="t-sidebar-footer">
+                    <button className="t-btn-sidebar-action t-btn-new" onClick={addNewDay}>
+                        + Nuovo Giorno
+                    </button>
+                    {/* Tasto per aprire un modale (non ancora creato) per il Setup Kcal */}
+                    <button className="t-btn-sidebar-action t-btn-settings" onClick={() => alert("Apri Setup Target (in sviluppo)")} style={{ background: '#F5F5F7', color: '#1D1D1F', border: 'none' }}>
+                        Setup Obiettivi
+                    </button>
+                    {/* Tasto che aprirà il Database Alimenti */}
+                    <button className="t-btn-sidebar-action t-btn-settings" onClick={() => setIsDbOpen(true)}>
+                        Database Alimenti
+                    </button>
+                </div>
+            </nav>
+
+{/* --- AREA CENTRALE (DASHBOARD E STAMPA) --- */}
+            <main className="t-main-content">
+                <div className="t-container-wrapper" style={{ height: '100%' }}>
+                    
+                    {/* INTESTAZIONE CLIENTE E RECAP OBIETTIVI (Visibile in app e in stampa) */}
+                    <div className="t-client-header-card">
+                        <div className="t-input-floating">
+                            <label>Cliente</label>
+                            <input type="text" defaultValue={patient ? `${patient.nome} ${patient.cognome}` : ''} placeholder="Nome Cognome"/>
+                        </div>
+                        <div className="t-input-floating">
+                            <label>Data Inizio</label>
+                            <input type="date" defaultValue={new Date().toISOString().split('T')[0]}/>
+                        </div>
+                        <div className="t-input-floating">
+                            <label>Target Kcal</label>
+                            <div style={{ padding: '12px 16px', fontSize: '18px', fontWeight: 800, color: '#00C853' }}>
+                                {targets.kcal} kcal
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* STATO VUOTO (Se non ci sono pasti da mostrare per il giorno attivo) */}
+                    {activeDay?.meals.length === 0 && (
+                        <div style={{ width: '100%', minHeight: '400px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#86868B', background: 'rgba(255,255,255,0.5)', borderRadius: '24px', border: '2px dashed #E5E5EA' }}>
+                            <h3 style={{ fontSize: '20px', fontWeight: 600, color: '#1D1D1F' }}>Nessun pasto in questo giorno</h3>
+                            <p style={{ fontSize: '14px' }}>Usa il pulsante nella barra laterale per aggiungere il primo pasto.</p>
+                        </div>
+                    )}
+
+                    {/* PANORAMICA DEL GIORNO ATTIVO (Mostra tutti i pasti e gli alimenti, utile per la stampa) */}
+                    {activeDay && activeDay.meals.map(meal => {
+                        const mealTotals = calculateTotals(meal.items);
+                        return (
+                            <div key={meal.id} className="t-meal-card" style={{ background: '#FFFFFF', borderRadius: '24px', padding: '25px', marginBottom: '25px', border: '1px solid #E5E5EA' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px', borderBottom: '1px solid #F0F0F2', paddingBottom: '15px' }}>
+                                    <h3 style={{ fontSize: '20px', fontWeight: 800, margin: 0, color: '#1D1D1F' }}>{meal.title}</h3>
+                                    
+                                    {/* Etichette riassuntive del pasto (visibili a colpo d'occhio) */}
+                                    <div style={{ display: 'flex', gap: '12px', fontSize: '12px', fontWeight: 700, background: '#F5F5F7', padding: '6px 12px', borderRadius: '8px' }}>
+                                        <span style={{ color: '#1D1D1F' }}>{mealTotals.kcal.toFixed(0)} kcal</span>
+                                        <span style={{ color: '#86868B' }}>C {mealTotals.c.toFixed(1)}g</span>
+                                        <span style={{ color: '#00C853' }}>P {mealTotals.p.toFixed(1)}g</span>
+                                        <span style={{ color: '#86868B' }}>F {mealTotals.f.toFixed(1)}g</span>
+                                    </div>
+                                </div>
+
+                                {/* Lista in sola lettura per l'area principale / stampa */}
+                                {meal.items.map((item, idx) => (
+                                    <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid #F9F9FB', fontSize: '14px' }}>
+                                        <div style={{ fontWeight: 600 }}>{idx + 1}. {item.name || 'Alimento non specificato'}</div>
+                                        <div style={{ display: 'flex', gap: '20px', color: '#86868B' }}>
+                                            <span style={{ width: '60px', textAlign: 'right', fontWeight: 700, color: '#1D1D1F' }}>{item.weight}g</span>
+                                            <span style={{ width: '60px', textAlign: 'right' }}>{((item.kcal * item.weight) / 100).toFixed(0)} kcal</span>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        );
+                    })}
+                </div>
+            </main>
+
+            {/* --- FINESTRA MODALE IN SOVRAPPRESSIONE PER COMPILARE IL PASTO --- */}
+            {activeMealInfo && (() => {
+                const currentDay = dietDays.find(d => d.id === activeMealInfo.dayId);
+                const currentMeal = currentDay?.meals.find(m => m.id === activeMealInfo.mealId);
+                if (!currentMeal) return null;
+
+                const currentMealTotals = calculateTotals(currentMeal.items);
+
+                return (
+                    <div className="modal-backdrop">
+                        <div className="modal-window">
+                            
+                            {/* HEADER DEL MODALE (Titolo pasto e riga totali dal vivo) */}
+                            <div style={{ padding: '25px 40px', borderBottom: '1px solid #F0F0F2', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'white' }}>
+                                <div>
+                                    <span style={{ fontSize: '10px', fontWeight: 800, color: '#00C853', textTransform: 'uppercase', letterSpacing: '1.5px' }}>{currentDay.title}</span>
+                                    {/* Input per rinominare il pasto direttamente dal modale */}
+                                    <input 
+                                        type="text" 
+                                        value={currentMeal.title} 
+                                        onChange={e => updateMealTitle(currentDay.id, currentMeal.id, e.target.value)}
+                                        style={{ display: 'block', fontSize: '28px', fontWeight: 800, margin: 0, color: '#1D1D1F', border: 'none', outline: 'none', background: 'transparent', padding: 0 }}
+                                    />
+                                </div>
+                                
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
+                                    <div style={{ textAlign: 'center' }}><div style={{ fontSize: '10px', color: '#86868B', textTransform: 'uppercase', fontWeight: 700 }}>Kcal</div><div style={{ fontSize: '16px', fontWeight: 800 }}>{currentMealTotals.kcal.toFixed(0)}</div></div>
+                                    <div style={{ textAlign: 'center' }}><div style={{ fontSize: '10px', color: '#86868B', textTransform: 'uppercase', fontWeight: 700 }}>Carbo</div><div style={{ fontSize: '16px', fontWeight: 800 }}>{currentMealTotals.c.toFixed(1)}g</div></div>
+                                    <div style={{ textAlign: 'center' }}><div style={{ fontSize: '10px', color: '#86868B', textTransform: 'uppercase', fontWeight: 700 }}>Pro</div><div style={{ fontSize: '16px', fontWeight: 800, color: '#00C853' }}>{currentMealTotals.p.toFixed(1)}g</div></div>
+                                    <div style={{ textAlign: 'center' }}><div style={{ fontSize: '10px', color: '#86868B', textTransform: 'uppercase', fontWeight: 700 }}>Grassi</div><div style={{ fontSize: '16px', fontWeight: 800 }}>{currentMealTotals.f.toFixed(1)}g</div></div>
+                                    
+                                    <button onClick={() => setActiveMealInfo(null)} className="t-icon-btn" style={{ width: '44px', height: '44px', background: '#F5F5F7', border: 'none', marginLeft: '10px' }}>
+                                        X
+                                    </button>
+                                </div>
+                            </div>
+
+                            {/* CORPO DEL MODALE (Tabella di editing degli alimenti) */}
+                            <div style={{ flex: 1, padding: '40px', overflowY: 'auto', background: '#FAFAFC' }}>
+                                <div style={{ maxWidth: '1000px', margin: '0 auto' }}>
+                                    
+                                    {/* Mappatura delle righe degli alimenti */}
+                                    {currentMeal.items.map((item, i) => (
+                                        <div key={item.id} className="t-exercise-item" style={{ display: 'flex', gap: '15px', alignItems: 'center' }}>
+                                            
+                                            <div className="t-set-badge" style={{ flexShrink: 0 }}>{i + 1}</div>
+                                            
+                                            {/* Blocco Ricerca Alimento con Autocompletamento */}
+                                            <div style={{ flex: 2, position: 'relative' }}>
+                                                <input 
+                                                    type="text" className="t-ex-input" value={item.name} 
+                                                    onChange={e => updateFoodValue(currentDay.id, currentMeal.id, item.id, 'name', e.target.value)} 
+                                                    placeholder="Cerca alimento dal database..." 
+                                                />
+                                                {/* Dropdown dei Suggerimenti */}
+                                                {suggestions[item.id] && (
+                                                    <div className="t-suggestions-list">
+                                                        {suggestions[item.id].map((sugg, sIdx) => (
+                                                            <div key={sIdx} className="t-suggestion-item" onClick={() => applyFoodSuggestion(currentDay.id, currentMeal.id, item.id, sugg)}>
+                                                                <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
+                                                                    <span>{sugg.name}</span>
+                                                                    <span style={{ fontWeight: 700, color: '#1D1D1F' }}>{sugg.kcal} kcal/100g</span>
+                                                                </div>
+                                                                <span className="t-suggestion-tag">{sugg.category}</span>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                )}
+                                            </div>
+
+                                            {/* Input Grammatura */}
+                                            <div style={{ display: 'flex', alignItems: 'center', background: '#FFFFFF', borderRadius: '8px', padding: '0 10px', border: '1px solid #E5E5EA', width: '100px' }}>
+                                                <input 
+                                                    type="number" value={item.weight} 
+                                                    onChange={e => updateFoodValue(currentDay.id, currentMeal.id, item.id, 'weight', e.target.value)} 
+                                                    style={{ width: '100%', border: 'none', background: 'transparent', outline: 'none', fontWeight: 700, textAlign: 'right', fontSize: '15px', color: '#00C853', padding: '10px 0' }} 
+                                                />
+                                                <span style={{ fontSize: '13px', color: '#86868B', marginLeft: '4px', fontWeight: 600 }}>g</span>
+                                            </div>
+
+                                            {/* Riepilogo Macro della singola riga */}
+                                            <div style={{ width: '140px', textAlign: 'right', display: 'flex', flexDirection: 'column' }}>
+                                                <span style={{ fontSize: '15px', fontWeight: 800, color: '#1D1D1F' }}>
+                                                    {((item.kcal * item.weight) / 100).toFixed(0)} kcal
+                                                </span>
+                                                <span style={{ fontSize: '11px', color: '#86868B', fontWeight: 600 }}>
+                                                    C:{((item.c * item.weight) / 100).toFixed(1)} P:{((item.p * item.weight) / 100).toFixed(1)} F:{((item.f * item.weight) / 100).toFixed(1)}
+                                                </span>
+                                            </div>
+
+                                            {/* Tasto Rimuovi Riga */}
+                                            <button className="t-icon-btn danger" onClick={() => removeFoodItem(currentDay.id, currentMeal.id, item.id)}>
+                                                Del
+                                            </button>
+                                        </div>
+                                    ))}
+
+                                    {/* Bottone per aggiungere un nuovo alimento vuoto in fondo al pasto */}
+                                    <button 
+                                        onClick={() => addFoodItem(currentDay.id, currentMeal.id)} 
+                                        style={{ width: '100%', padding: '20px', borderRadius: '16px', border: '2px dashed #E5E5EA', background: '#FFFFFF', color: '#86868B', fontWeight: 700, cursor: 'pointer', transition: '0.3s', marginTop: '10px' }}
+                                    >
+                                        + Aggiungi Nuovo Alimento
+                                    </button>
+                                </div>
+                            </div>
+
+                            {/* FOOTER DEL MODALE */}
+                            <div style={{ padding: '20px 40px', borderTop: '1px solid #F0F0F2', background: '#FFFFFF', display: 'flex', justifyContent: 'flex-end' }}>
+                                <button onClick={() => setActiveMealInfo(null)} style={{ background: '#1D1D1F', color: 'white', padding: '14px 40px', borderRadius: '12px', border: 'none', fontWeight: 700, cursor: 'pointer', fontSize: '14px' }}>
+                                    Conferma e Chiudi
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                );
+            })()}
+
+            {/* --- PULSANTE STAMPA GALLEGGIANTE --- */}
+            {/* Invisibile in fase di stampa grazie alle media query nel CSS */}
+            <button className="t-fab-print no-print" onClick={() => window.print()}>
+                <span style={{ fontSize: '14px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '1px' }}>Stampa</span>
+            </button>
+
+            {/* --- MODALE SETUP OBIETTIVI (TARGET NUTRIZIONALI) --- */}
+            {isSetupOpen && (
+                <div className="modal-backdrop">
+                    <div className="modal-window" style={{ maxWidth: '600px', height: 'auto' }}>
+                        
+                        {/* HEADER SETUP */}
+                        <div style={{ padding: '25px 40px', borderBottom: '1px solid #F0F0F2', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <h3 style={{ fontSize: '22px', fontWeight: 800, margin: 0, color: '#1D1D1F' }}>Setup Obiettivi Nutrizionali</h3>
+                            <button onClick={() => setIsSetupOpen(false)} style={{ border: 'none', background: 'transparent', fontSize: '20px', cursor: 'pointer', color: '#86868B', fontWeight: 800 }}>X</button>
+                        </div>
+                        
+                        {/* CORPO SETUP */}
+                        <div style={{ padding: '40px', background: '#FAFAFC' }}>
+                            
+                            {/* Input Kcal Totali */}
+                            <div style={{ marginBottom: '30px' }}>
+                                <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: '#86868B', textTransform: 'uppercase', marginBottom: '10px' }}>
+                                    Target Kcal Giornaliere
+                                </label>
+                                <input 
+                                    type="number" 
+                                    value={targets.kcal} 
+                                    onChange={e => setTargets(prev => ({ ...prev, kcal: Number(e.target.value) }))} 
+                                    style={{ width: '100%', padding: '15px', fontSize: '28px', fontWeight: 800, borderRadius: '12px', border: '1px solid #E5E5EA', textAlign: 'center', color: '#00C853', outline: 'none' }} 
+                                />
+                            </div>
+                            
+                            {/* Slider per le percentuali dei Macronutrienti */}
+                            {['c', 'p', 'f'].map(macro => {
+                                const labels = { c: 'Carboidrati', p: 'Proteine', f: 'Grassi' };
+                                const colors = { c: '#1D1D1F', p: '#00C853', f: '#86868B' };
+                                return (
+                                    <div key={macro} style={{ marginBottom: '20px' }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', fontSize: '14px', fontWeight: 700 }}>
+                                            <span style={{ color: '#1D1D1F' }}>{labels[macro]}</span>
+                                            <span style={{ color: colors[macro], fontSize: '16px', fontWeight: 800 }}>{targets[macro]}%</span>
+                                        </div>
+                                        {/* Range slider per un bilanciamento rapido e visivo */}
+                                        <input 
+                                            type="range" min="0" max="100" 
+                                            value={targets[macro]} 
+                                            onChange={e => setTargets(prev => ({ ...prev, [macro]: Number(e.target.value) }))} 
+                                            style={{ width: '100%', cursor: 'pointer' }} 
+                                        />
+                                    </div>
+                                )
+                            })}
+                            
+                            {/* Validazione della somma delle percentuali */}
+                            <div style={{ marginTop: '30px', background: '#FFFFFF', padding: '20px', borderRadius: '12px', textAlign: 'center', fontSize: '15px', fontWeight: 700, border: '1px solid #E5E5EA' }}>
+                                Totale Macronutrienti: {targets.c + targets.p + targets.f}% 
+                                {(targets.c + targets.p + targets.f) !== 100 && (
+                                    <span style={{ color: '#FF3B30', display: 'block', marginTop: '5px', fontSize: '13px' }}>
+                                        Attenzione: La somma deve essere esattamente 100%
+                                    </span>
+                                )}
+                            </div>
+                        </div>
+
+                        {/* FOOTER SETUP */}
+                        <div style={{ padding: '20px 40px', borderTop: '1px solid #F0F0F2', background: '#FFFFFF', display: 'flex', justifyContent: 'flex-end' }}>
+                            <button onClick={() => setIsSetupOpen(false)} style={{ background: '#1D1D1F', color: 'white', padding: '12px 35px', borderRadius: '12px', border: 'none', fontWeight: 700, cursor: 'pointer' }}>
+                                Salva e Chiudi
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* --- MODALE DATABASE ALIMENTI --- */}
+            {isDbOpen && (
+                <div className="modal-backdrop">
+                    <div className="modal-window">
+                        
+                        {/* HEADER DATABASE */}
+                        <div style={{ padding: '25px 40px', borderBottom: '1px solid #F0F0F2', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div>
+                                <h3 style={{ fontSize: '22px', fontWeight: 800, margin: 0, color: '#1D1D1F' }}>Gestione Database Alimenti</h3>
+                                <span style={{ fontSize: '12px', color: '#86868B', fontWeight: 600 }}>{foodDB.length} alimenti registrati</span>
+                            </div>
+                            <button onClick={() => setIsDbOpen(false)} style={{ border: 'none', background: 'transparent', fontSize: '20px', cursor: 'pointer', color: '#86868B', fontWeight: 800 }}>X</button>
+                        </div>
+                        
+                        {/* BARRA INSERIMENTO NUOVO ALIMENTO */}
+                        <div style={{ padding: '20px 40px', background: '#FAFAFC', borderBottom: '1px solid #E5E5EA', display: 'grid', gridTemplateColumns: '2fr 1.5fr 1fr 1fr 1fr 1fr 50px', gap: '10px', alignItems: 'center' }}>
+                            <input type="text" placeholder="Nome Alimento" value={newFood.name} onChange={e => setNewFood({...newFood, name: e.target.value})} style={{ padding: '12px', borderRadius: '8px', border: '1px solid #E5E5EA', fontSize: '14px', fontWeight: 600, outline: 'none' }} />
+                            <input type="text" placeholder="Categoria (es. Frutta)" value={newFood.category} onChange={e => setNewFood({...newFood, category: e.target.value})} style={{ padding: '12px', borderRadius: '8px', border: '1px solid #E5E5EA', fontSize: '14px', outline: 'none' }} />
+                            <input type="number" placeholder="Kcal" value={newFood.kcal} onChange={e => setNewFood({...newFood, kcal: e.target.value})} style={{ padding: '12px', borderRadius: '8px', border: '1px solid #E5E5EA', fontSize: '14px', outline: 'none' }} />
+                            <input type="number" placeholder="Pro (g)" value={newFood.p} onChange={e => setNewFood({...newFood, p: e.target.value})} style={{ padding: '12px', borderRadius: '8px', border: '1px solid #E5E5EA', fontSize: '14px', outline: 'none' }} />
+                            <input type="number" placeholder="Car (g)" value={newFood.c} onChange={e => setNewFood({...newFood, c: e.target.value})} style={{ padding: '12px', borderRadius: '8px', border: '1px solid #E5E5EA', fontSize: '14px', outline: 'none' }} />
+                            <input type="number" placeholder="Fat (g)" value={newFood.f} onChange={e => setNewFood({...newFood, f: e.target.value})} style={{ padding: '12px', borderRadius: '8px', border: '1px solid #E5E5EA', fontSize: '14px', outline: 'none' }} />
+                            <button onClick={addFoodToDB} style={{ background: '#00C853', color: 'white', border: 'none', borderRadius: '8px', height: '100%', fontWeight: 800, cursor: 'pointer', fontSize: '18px' }}>+</button>
+                        </div>
+
+                        {/* BARRA DI RICERCA */}
+                        <div style={{ padding: '20px 40px', background: '#FFFFFF' }}>
+                            <input 
+                                type="text" placeholder="Cerca nel database..." 
+                                value={dbSearch} onChange={e => setDbSearch(e.target.value)} 
+                                style={{ width: '100%', padding: '12px 16px', borderRadius: '12px', border: '1px solid #E5E5EA', fontSize: '14px', fontWeight: 600, background: '#F9F9FB', outline: 'none' }} 
+                            />
+                        </div>
+
+                        {/* TABELLA DATABASE (Modificabile in linea) */}
+                        <div style={{ flex: 1, overflowY: 'auto', padding: '0 40px 20px' }}>
+                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '14px' }}>
+                                <thead>
+                                    <tr>
+                                        <th style={{ width:'30%', position: 'sticky', top: 0, background: '#FFFFFF', padding: '12px 10px', textAlign: 'left', fontSize: '11px', textTransform: 'uppercase', color: '#86868B', borderBottom: '2px solid #F0F0F2', zIndex: 2 }}>Alimento</th>
+                                        <th style={{ width:'20%', position: 'sticky', top: 0, background: '#FFFFFF', padding: '12px 10px', textAlign: 'left', fontSize: '11px', textTransform: 'uppercase', color: '#86868B', borderBottom: '2px solid #F0F0F2', zIndex: 2 }}>Categoria</th>
+                                        <th style={{ width:'12%', position: 'sticky', top: 0, background: '#FFFFFF', padding: '12px 10px', textAlign: 'left', fontSize: '11px', textTransform: 'uppercase', color: '#86868B', borderBottom: '2px solid #F0F0F2', zIndex: 2 }}>Kcal</th>
+                                        <th style={{ width:'12%', position: 'sticky', top: 0, background: '#FFFFFF', padding: '12px 10px', textAlign: 'left', fontSize: '11px', textTransform: 'uppercase', color: '#86868B', borderBottom: '2px solid #F0F0F2', zIndex: 2 }}>Pro</th>
+                                        <th style={{ width:'12%', position: 'sticky', top: 0, background: '#FFFFFF', padding: '12px 10px', textAlign: 'left', fontSize: '11px', textTransform: 'uppercase', color: '#86868B', borderBottom: '2px solid #F0F0F2', zIndex: 2 }}>Car</th>
+                                        <th style={{ width:'12%', position: 'sticky', top: 0, background: '#FFFFFF', padding: '12px 10px', textAlign: 'left', fontSize: '11px', textTransform: 'uppercase', color: '#86868B', borderBottom: '2px solid #F0F0F2', zIndex: 2 }}>Fat</th>
+                                        <th style={{ width:'5%', position: 'sticky', top: 0, background: '#FFFFFF', padding: '12px 10px', borderBottom: '2px solid #F0F0F2', zIndex: 2 }}></th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {foodDB.map((f, index) => {
+                                        // Filtro di ricerca testuale
+                                        if (dbSearch && !f.name.toLowerCase().includes(dbSearch.toLowerCase()) && !f.category.toLowerCase().includes(dbSearch.toLowerCase())) return null;
+                                        return (
+                                            <tr key={index} style={{ borderBottom: '1px solid #F5F5F7' }}>
+                                                <td style={{ padding: '8px' }}><input value={f.name} onChange={e => updateDbFood(index, 'name', e.target.value)} style={{ width: '100%', border: '1px solid transparent', background: 'transparent', padding: '8px', borderRadius: '6px', fontSize: '14px', fontWeight: 600, color: '#1D1D1F', outline: 'none' }}/></td>
+                                                <td style={{ padding: '8px' }}><input value={f.category} onChange={e => updateDbFood(index, 'category', e.target.value)} style={{ width: '100%', border: '1px solid transparent', background: 'transparent', padding: '8px', borderRadius: '6px', fontSize: '14px', color: '#86868B', outline: 'none' }}/></td>
+                                                <td style={{ padding: '8px' }}><input type="number" value={f.kcal} onChange={e => updateDbFood(index, 'kcal', e.target.value)} style={{ width: '100%', border: '1px solid transparent', background: 'transparent', padding: '8px', borderRadius: '6px', fontSize: '14px', fontWeight: 700, color: '#1D1D1F', outline: 'none' }}/></td>
+                                                <td style={{ padding: '8px' }}><input type="number" value={f.p} onChange={e => updateDbFood(index, 'p', e.target.value)} style={{ width: '100%', border: '1px solid transparent', background: 'transparent', padding: '8px', borderRadius: '6px', fontSize: '14px', color: '#1D1D1F', outline: 'none' }}/></td>
+                                                <td style={{ padding: '8px' }}><input type="number" value={f.c} onChange={e => updateDbFood(index, 'c', e.target.value)} style={{ width: '100%', border: '1px solid transparent', background: 'transparent', padding: '8px', borderRadius: '6px', fontSize: '14px', color: '#1D1D1F', outline: 'none' }}/></td>
+                                                <td style={{ padding: '8px' }}><input type="number" value={f.f} onChange={e => updateDbFood(index, 'f', e.target.value)} style={{ width: '100%', border: '1px solid transparent', background: 'transparent', padding: '8px', borderRadius: '6px', fontSize: '14px', color: '#1D1D1F', outline: 'none' }}/></td>
+                                                <td style={{ padding: '8px', textAlign: 'center' }}>
+                                                    <button onClick={() => deleteFoodDB(index)} style={{ background: 'transparent', border: 'none', color: '#FF3B30', fontWeight: 800, cursor: 'pointer', padding: '8px' }}>X</button>
+                                                </td>
+                                            </tr>
+                                        )
+                                    })}
+                                </tbody>
+                            </table>
+                        </div>
+
+                        {/* FOOTER DATABASE (Import/Export e Reset) */}
+                        <div style={{ padding: '20px 40px', borderTop: '1px solid #E5E5EA', background: '#FFFFFF', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div style={{ display: 'flex', gap: '15px' }}>
+                                <button style={{ background: '#F5F5F7', border: 'none', padding: '10px 20px', borderRadius: '8px', cursor: 'pointer', fontSize: '13px', fontWeight: 600, color: '#1D1D1F' }} onClick={exportJSON}>
+                                    Esporta Backup (JSON)
+                                </button>
+                                <button style={{ background: '#F5F5F7', border: 'none', padding: '10px 20px', borderRadius: '8px', cursor: 'pointer', fontSize: '13px', fontWeight: 600, color: '#1D1D1F' }} onClick={() => fileInputRef.current.click()}>
+                                    Importa Dati
+                                </button>
+                                <input type="file" ref={fileInputRef} accept=".json" style={{ display: 'none' }} onChange={importJSON} />
+                            </div>
+                            
+                            <button style={{ color: '#FF3B30', background: 'transparent', border: 'none', fontSize: '13px', fontWeight: 700, cursor: 'pointer', textDecoration: 'underline' }} onClick={resetDatabase}>
+                                Ripristina Database di Default
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
