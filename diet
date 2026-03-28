@@ -947,24 +947,14 @@ const HistoryIcon = () => (
         comment: '' 
     });
 
-    // --- STATI ANALISI AVANZATA E DATABASE EFSA ---
-    const [drvDB, setDrvDB] = useState(() => {
-        const stored = localStorage.getItem('diet_drv_db');
-        return stored ? JSON.parse(stored) : [];
-    });
+   
     
     useEffect(() => {
         localStorage.setItem('diet_drv_db', JSON.stringify(drvDB));
     }, [drvDB]);
 
-    const [isAnalysisOpen, setIsAnalysisOpen] = useState(false);
-    const [analysisTimeframe, setAnalysisTimeframe] = useState('day'); // 'meal', 'day', 'week'
     const [selectedMealForAnalysis, setSelectedMealForAnalysis] = useState(null); // ID del pasto se 'meal'
     
-    // Stati per l'Editor DRV
-    const [isDrvEditorOpen, setIsDrvEditorOpen] = useState(false);
-    const [editingDrv, setEditingDrv] = useState(null);
-    const drvFileInputRef = useRef(null);
 
     
     
@@ -1147,35 +1137,7 @@ const HistoryIcon = () => (
         return targets;
     };
 
-    // --- MOTORE DI CALCOLO MICRONUTRIENTI ---
-    const analyzeCompleteBioProfile = (dietDays) => {
-        const analysis = {};
-        
-        // 1. Inizializza tutti i campi possibili a 0 basandosi sul template
-        Object.keys(emptyFoodTemplate).forEach(k => analysis[k] = 0);
-
-        // 2. Somma tutti gli alimenti di tutti i giorni
-        dietDays.forEach(day => {
-            day.meals.forEach(meal => {
-                meal.items.forEach(item => {
-                    const foodData = foodDB.find(f => f.name === item.name);
-                    if (!foodData) return;
-                    
-                    const factor = (Number(item.weight) || 0) / 100;
-                    Object.keys(emptyFoodTemplate).forEach(key => {
-                        const val = Number(foodData[key]) || 0;
-                        analysis[key] += (val * factor);
-                    });
-                });
-            });
-        });
-
-        // 3. Calcola la Media giornaliera (dividendo per il numero di giorni nel piano)
-        const dayCount = dietDays.length || 1;
-        Object.keys(analysis).forEach(key => analysis[key] /= dayCount);
-
-        return analysis;
-    };
+    
 
     // --- GESTIONE SALVATAGGIO REPORT ---
     const saveSmartReport = () => {
@@ -1281,12 +1243,7 @@ const HistoryIcon = () => (
         return <div ref={miniPlotRef} style={{ width: '100%', height: '220px', marginTop: 'auto' }}></div>;
     };
 
-    // Estrae il numero da stringhe come "80 mg/day"
-    const parseEFSAValue = (valStr) => {
-        if (!valStr || typeof valStr !== 'string') return parseFloat(valStr) || 0;
-        if (valStr.includes('ND') || valStr.includes('NA')) return 0;
-        return parseFloat(valStr.replace(/[^\d.-]/g, '')) || 0;
-    };
+    
 
     
 
